@@ -259,6 +259,14 @@
         [_statusLabel setHidden:NO];
         self.statusLabel.text = streamInfo;
     };
+    
+    self.audioController.stream.onRecordTrackAvailable = ^(NSString *recordDirectory, NSString *recordFile, NSDictionary *metadata, BOOL finish) {
+        
+    };
+    
+    self.audioController.stream.onRecordError = ^(NSError *error) {
+        NSLog(@"error = %@", error.localizedDescription);
+    };
 }
 
 - (void)viewDidAppear:(BOOL)animated
@@ -447,7 +455,8 @@
 
 - (IBAction)openStationUrl:(id)sender
 {
-    [[UIApplication sharedApplication] openURL:_stationURL];
+    [self.audioController startRecording];
+    //[[UIApplication sharedApplication] openURL:_stationURL];
 }
 
 - (IBAction)changeVolume:(id)sender
@@ -483,6 +492,13 @@
 
 - (IBAction)toggleAnalyzer:(id)sender
 {
+    if ([self.audioController isRecording]) {
+        [self.audioController stopRecording];
+    }
+    else {
+        [self.audioController startRecording];
+    }
+    return;
     if (!_analyzerEnabled) {
         _analyzer = [[FSFrequencyDomainAnalyzer alloc] init];
         _analyzer.delegate = self.frequencyPlotView;
@@ -516,6 +532,7 @@
     self.navigationItem.title = self.selectedPlaylistItem.title;
     
     self.audioController.url = self.selectedPlaylistItem.nsURL;
+    //self.audioController.url = [NSURL URLWithString:@"http://stream-dc1.radioparadise.com/mp3-32"];
 }
 
 - (FSPlaylistItem *)selectedPlaylistItem

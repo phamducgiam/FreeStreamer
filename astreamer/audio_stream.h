@@ -14,6 +14,7 @@
 
 #include <AudioToolbox/AudioToolbox.h>
 #include <list>
+#include <map>
 
 namespace astreamer {
     
@@ -115,6 +116,11 @@ public:
     void streamEndEncountered();
     void streamErrorOccurred(CFStringRef errorDesc);
     void streamMetaDataAvailable(std::map<CFStringRef,CFStringRef> metaData);
+    
+    bool startRecording(CFStringRef recordDirectory);
+    void stopRecording();
+    bool isRecording();
+    void setRecordingTrackEnabled(bool enabled);
 
 private:
     
@@ -205,6 +211,36 @@ private:
     static void streamDataCallback(void *inClientData, UInt32 inNumberBytes, UInt32 inNumberPackets, const void *inInputData, AudioStreamPacketDescription *inPacketDescriptions);
     
     AudioFileTypeID audioStreamTypeFromContentType(CFStringRef contentType);
+    
+    SInt64 m_readTrackBytes; //to know when a track is finish
+    SInt64 m_parsedBytes;
+    
+    CFStringRef m_streamTitleKey;
+    std::map<CFStringRef,CFStringRef>* m_previousMetaData;
+    std::map<CFStringRef,CFStringRef>* m_metaData;
+    
+    //dispatch_queue_t m_recordQueue;
+    bool m_recording;
+    bool m_RecordingTrackEnabled;
+    AudioFileID m_audioFileRecording;
+    UInt8 *m_magicCookie;
+    UInt32 m_magicCookieSize;
+    SInt64 m_currentPacketRecording;
+    CFStringRef m_recordDirectory;
+    CFStringRef m_recordFile;
+    CFDateFormatterRef m_dateFormatter;
+    
+    void releaseMetaData(std::map<CFStringRef, CFStringRef> *metaData);
+    CFStringRef findStreamTitle(std::map<CFStringRef, CFStringRef> *metaData);
+    void handleDataForRecording(UInt32 inNumberBytes, UInt32 inNumberPackets, const void *inInputData, AudioStreamPacketDescription *inPacketDescriptions);
+    void writeDataForRecording(UInt32 inNumberBytes, UInt32 inNumberPackets, const void *inInputData, AudioStreamPacketDescription *inPacketDescriptions);
+    CFStringRef audioFileExtensionFromContentType(CFStringRef contentType);
+    CFStringRef currentDate();
+    OSStatus writeMagicCookieToRecordingFile();
+    void handleRecordingTrack(bool finish);
+    void handleRecordingError(OSStatus status);
+    OSStatus prepareForRecording();
+    void clearAfterRecording();
 };
     
 class Audio_Stream_Delegate {
@@ -213,7 +249,9 @@ public:
     virtual void audioStreamErrorOccurred(int errorCode, CFStringRef errorDescription) = 0;
     virtual void audioStreamMetaDataAvailable(std::map<CFStringRef,CFStringRef> metaData) = 0;
     virtual void samplesAvailable(AudioBufferList samples, AudioStreamPacketDescription description) = 0;
-};    
+    virtual void audioStreamDidRecordTrack(CFStringRef recordDirectory, CFStringRef recordFile, std::map<CFStringRef, CFStringRef> *metaData, bool finish) = 0;
+    virtual void audioStreamRecordingErrorOccurred(bool status) = 0;
+};
 
 } // namespace astreamer
 

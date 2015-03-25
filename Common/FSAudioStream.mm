@@ -175,6 +175,8 @@ public:
     void audioStreamStateChanged(astreamer::Audio_Stream::State state);
     void audioStreamMetaDataAvailable(std::map<CFStringRef,CFStringRef> metaData);
     void samplesAvailable(AudioBufferList samples, AudioStreamPacketDescription description);
+    void audioStreamDidRecordTrack(CFStringRef recordDirectory, CFStringRef recordFile, std::map<CFStringRef, CFStringRef> *metaData, bool finish);
+    void audioStreamRecordingErrorOccurred(bool status);
 };
 
 /*
@@ -220,6 +222,8 @@ public:
 @property (copy) void (^onFailure)(FSAudioStreamError error, NSString *errorDescription);
 @property (nonatomic,unsafe_unretained) id<FSPCMAudioStreamDelegate> delegate;
 @property (nonatomic,unsafe_unretained) FSAudioStream *stream;
+@property (copy) void (^onRecordTrackAvailable)(NSString *recordDirectory, NSString *recordFile, NSDictionary *metadata, BOOL finish);
+@property (copy) void (^onRecordError)(NSError *error);
 
 - (AudioStreamStateObserver *)streamStateObserver;
 
@@ -252,6 +256,11 @@ public:
 - (void)setPlayRate:(float)playRate;
 - (astreamer::AS_Playback_Position)playbackPosition;
 - (float)durationInSeconds;
+
+- (BOOL)startRecording:(NSString *)recordDirectory;
+- (void)stopRecording;
+- (BOOL)isRecording;
+- (void)setRecordingTrackEnabled:(BOOL)enabled;
 @end
 
 @implementation FSAudioStreamPrivate
@@ -885,6 +894,26 @@ public:
     return _audioStream->durationInSeconds();
 }
 
+- (BOOL)startRecording:(NSString *)recordDirectory
+{
+    return _audioStream->startRecording((__bridge CFStringRef)recordDirectory);
+}
+
+- (void)stopRecording
+{
+    _audioStream->stopRecording();
+}
+
+- (BOOL)isRecording
+{
+    return _audioStream->isRecording();
+}
+
+- (void)setRecordingTrackEnabled:(BOOL)enabled
+{
+    _audioStream->setRecordingTrackEnabled(enabled);
+}
+
 -(NSString *)description
 {
     return [NSString stringWithFormat:@"[FreeStreamer %@] URL: %@\nbufferCount: %i\nbufferSize: %i\nmaxPacketDescs: %i\ndecodeQueueSize: %i\nhttpConnectionBufferSize: %i\noutputSampleRate: %f\noutputNumChannels: %ld\nbounceInterval: %i\nmaxBounceCount: %i\nstartupWatchdogPeriod: %i\nmaxPrebufferedByteCount: %i\nformat: %@\nuserAgent: %@\ncacheDirectory: %@\npredefinedHttpHeaderValues: %@\ncacheEnabled: %@\nseekingFromCacheEnabled: %@\nmaxDiskCacheSize: %i\nrequiredInitialPrebufferedByteCountForContinuousStream: %i\nrequiredInitialPrebufferedByteCountForNonContinuousStream: %i",
@@ -1117,6 +1146,26 @@ public:
     [_private expungeCache];
 }
 
+- (BOOL)startRecording:(NSString *)recordDirectory
+{
+    return [_private startRecording:recordDirectory];
+}
+
+- (void)stopRecording
+{
+    [_private stopRecording];
+}
+
+- (BOOL)isRecording
+{
+    return [_private isRecording];
+}
+
+- (void)setRecordingTrackEnabled:(BOOL)enabled
+{
+    [_private setRecordingTrackEnabled:enabled];
+}
+
 - (FSStreamPosition)currentTimePlayed
 {
     FSStreamPosition pos;
@@ -1263,6 +1312,26 @@ public:
 - (id<FSPCMAudioStreamDelegate>)delegate
 {
     return _private.delegate;
+}
+
+- (void)setOnRecordTrackAvailable:(void (^)(NSString *recordDirectory, NSString *recordFile, NSDictionary *metadata, BOOL finish))onRecordTrackAvailable
+{
+    _private.onRecordTrackAvailable = onRecordTrackAvailable;
+}
+
+- (void (^)(NSString *, NSString *, NSDictionary *, BOOL))onRecordTrackAvailable
+{
+    return _private.onRecordTrackAvailable;
+}
+
+- (void)setOnRecordError:(void (^)(NSError *error))onRecordError
+{
+    _private.onRecordError = onRecordError;
+}
+
+- (void (^)(NSError *))onRecordError
+{
+    return _private.onRecordError;
 }
 
 -(NSString *)description
@@ -1428,5 +1497,68 @@ void AudioStreamStateObserver::samplesAvailable(AudioBufferList samples, AudioSt
         NSUInteger count = description.mDataByteSize / sizeof(int16_t);
         
         [priv.delegate audioStream:priv.stream samplesAvailable:buffer count:count];
+    }
+}
+
+void AudioStreamStateObserver::audioStreamDidRecordTrack(CFStringRef recordDirectory, CFStringRef recordFile, std::map<CFStringRef, CFStringRef> *metaData, bool finish)
+{
+    if (priv.onRecordTrackAvailable) {
+        NSMutableDictionary *metaDataDictionary = nil;
+        NSString *streamTitle = nil;
+        if (metaData) {
+            metaDataDictionary = [[NSMutableDictionary alloc] init];
+            
+            for (std::map<CFStringRef,CFStringRef>::iterator iter = metaData->begin(); iter != metaData->end(); iter++) {
+                CFStringRef key = iter->first;
+                CFStringRef value = iter->second;
+                
+                if (key == NULL || value == NULL) {
+                    continue;
+                }
+                
+                NSString *keyString = ((__bridge NSString*)key);
+                NSString *valueString = ((__bridge NSString*)value);
+                if ([keyString isEqualToString:@"StreamTitle"]) {
+                    streamTitle = valueString;
+                }
+                
+                metaDataDictionary[keyString] = valueString;
+            }
+        }
+        
+        NSString *directory = ((__bridge NSString*)recordDirectory);
+        NSString *file = ((__bridge NSString*)recordFile);
+        if (streamTitle) {
+            NSFileManager *fileManager = [NSFileManager defaultManager];
+            NSString *source = [directory stringByAppendingPathComponent:file];
+            NSString *extension = [file pathExtension];
+            NSString *destication;
+            NSInteger i = 0;
+            while (true) {
+                if (i == 0) {
+                    destication = [[directory stringByAppendingPathComponent:streamTitle] stringByAppendingPathExtension:extension];
+                }
+                else {
+                    destication = [[directory stringByAppendingPathComponent:[NSString stringWithFormat:@"%@-%ld", streamTitle, (long)i]] stringByAppendingPathExtension:extension];
+                }
+                if (![fileManager fileExistsAtPath:destication]) {
+                    break;
+                }
+                i++;
+            }
+            if ([fileManager moveItemAtPath:source toPath:destication error:nil]) {
+                file = streamTitle;
+            }
+        }
+        
+        priv.onRecordTrackAvailable(directory, file, metaDataDictionary, finish);
+    }
+}
+
+void AudioStreamStateObserver::audioStreamRecordingErrorOccurred(bool status)
+{
+    if (priv.onRecordError) {
+        NSError *error = [NSError errorWithDomain:NSOSStatusErrorDomain code:status userInfo:nil];
+        priv.onRecordError(error);
     }
 }

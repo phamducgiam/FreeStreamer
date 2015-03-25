@@ -33,6 +33,8 @@
     FSCheckContentTypeRequest *_checkContentTypeRequest;
     FSParsePlaylistRequest *_parsePlaylistRequest;
     FSParseRssPodcastFeedRequest *_parseRssPodcastFeedRequest;
+    
+    NSString *_recordDirectory;
 }
 
 /**
@@ -93,6 +95,25 @@
 
 -(void)playPreviousItem;
 
+/**
+ * start recording
+ */
+- (BOOL)startRecording;
+
+/**
+ * stop recording
+ */
+- (void)stopRecording;
+
+/**
+ * check if stream is recording
+ */
+- (BOOL)isRecording;
+
+/**
+ * set recording track enabled
+ */
+- (void)setRecordingTrackEnabled:(BOOL)enabled;
 
 /**
  * This property holds the current playback volume of the stream,
@@ -117,5 +138,10 @@
  * The playlist item the controller is currently using.
  */
 @property (nonatomic,readonly) FSPlaylistItem *currentPlaylistItem;
+
+/**
+ * record directory
+ */
+@property (readonly) NSString *recordDirectory;
 
 @end

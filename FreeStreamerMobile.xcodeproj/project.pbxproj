@@ -604,6 +604,8 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME = LaunchImage;
+				CODE_SIGN_IDENTITY = "iPhone Developer: Pham Duc Giam (EN4ZS4TXCF)";
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer: Pham Duc Giam (EN4ZS4TXCF)";
 				GCC_PRECOMPILE_PREFIX_HEADER = YES;
 				GCC_PREFIX_HEADER = "FreeStreamerMobile/FreeStreamerMobile-Prefix.pch";
 				HEADER_SEARCH_PATHS = (
@@ -614,6 +616,7 @@
 				INFOPLIST_FILE = "FreeStreamerMobile/FreeStreamerMobile-Info.plist";
 				IPHONEOS_DEPLOYMENT_TARGET = 7.0;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE = "df8330d6-76b5-4be3-a96c-85acc6e41679";
 				WRAPPER_EXTENSION = app;
 			};
 			name = Debug;
@@ -623,6 +626,8 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME = LaunchImage;
+				CODE_SIGN_IDENTITY = "iPhone Distribution: Pham Giam (7M2QSDPRN6)";
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Distribution: Pham Giam (7M2QSDPRN6)";
 				GCC_PRECOMPILE_PREFIX_HEADER = YES;
 				GCC_PREFIX_HEADER = "FreeStreamerMobile/FreeStreamerMobile-Prefix.pch";
 				HEADER_SEARCH_PATHS = (
@@ -633,6 +638,7 @@
 				INFOPLIST_FILE = "FreeStreamerMobile/FreeStreamerMobile-Info.plist";
 				IPHONEOS_DEPLOYMENT_TARGET = 7.0;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE = "9f781972-723e-43b5-b204-20fcd284121e";
 				WRAPPER_EXTENSION = app;
 			};
 			name = Release;

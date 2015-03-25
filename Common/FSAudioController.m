@@ -13,6 +13,8 @@
 #import "FSParsePlaylistRequest.h"
 #import "FSParseRssPodcastFeedRequest.h"
 
+NSString* const RECORD_DIRECTORY = @"com.magicud.record";
+
 @interface FSAudioController ()
 @property (readonly) FSAudioStream *audioStream;
 @property (readonly) FSCheckContentTypeRequest *checkContentTypeRequest;
@@ -33,6 +35,19 @@
         _checkContentTypeRequest = nil;
         _parsePlaylistRequest = nil;
         _readyToPlay = NO;
+        
+        _recordDirectory = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) lastObject];
+        _recordDirectory = [_recordDirectory stringByAppendingPathComponent:RECORD_DIRECTORY];
+        NSFileManager *fileManager = [NSFileManager defaultManager];
+        if (![fileManager fileExistsAtPath:_recordDirectory]) {
+            NSError *error;
+            BOOL res = [fileManager createDirectoryAtPath:_recordDirectory withIntermediateDirectories:YES attributes:nil error:&error];
+            if (!res) {
+                _recordDirectory = nil;
+            }
+            NSURL *url = [NSURL fileURLWithPath:_recordDirectory];
+            [url setResourceValue:@(YES) forKey:NSURLIsExcludedFromBackupKey error:nil];
+        }
     }
     return self;
 }
@@ -53,6 +68,8 @@
     [_checkContentTypeRequest cancel];
     [_parsePlaylistRequest cancel];
     [_parseRssPodcastFeedRequest cancel];
+    
+    _recordDirectory = nil;
 }
 
 /*
@@ -280,6 +297,36 @@
     
 }
 
+/**
+ * start recording
+ */
+- (BOOL)startRecording
+{
+    NSLog(@"start recording in directory = %@", self.recordDirectory);
+    return [self.audioStream startRecording:self.recordDirectory];
+}
+
+/**
+ * stop recording
+ */
+- (void)stopRecording
+{
+    NSLog(@"stop recording");
+    [self.audioStream stopRecording];
+}
+
+/**
+ * check if stream is recording
+ */
+- (BOOL)isRecording
+{
+    return [self.audioStream isRecording];
+}
+
+- (void)setRecordingTrackEnabled:(BOOL)enabled
+{
+    [self.audioStream setRecordingTrackEnabled:enabled];
+}
 
 /*
  * =======================================
@@ -367,6 +414,11 @@
         }
     }
     return nil;
+}
+
+- (NSString *)recordDirectory
+{
+    return _recordDirectory;
 }
 
 @end

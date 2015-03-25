@@ -102,7 +102,16 @@ Audio_Stream::Audio_Stream() :
     m_bitrateBufferIndex(0),
     m_outputVolume(1.0),
     m_queueCanAcceptPackets(true),
-    m_converterRunOutOfData(false)
+    m_converterRunOutOfData(false),
+    m_previousMetaData(NULL),
+    m_metaData(NULL),
+    m_recording(false),
+    m_RecordingTrackEnabled(true),
+    m_parsedBytes(0),
+    m_recordDirectory(NULL),
+    m_recordFile(NULL),
+    m_magicCookie(NULL),
+    m_audioFileRecording(NULL)
 {
     memset(&m_srcFormat, 0, sizeof m_srcFormat);
     
@@ -118,6 +127,12 @@ Audio_Stream::Audio_Stream() :
     m_dstFormat.mBytesPerFrame = 4;
     m_dstFormat.mChannelsPerFrame = 2;
     m_dstFormat.mBitsPerChannel = 16;
+    
+    m_streamTitleKey = CFSTR("StreamTitle");
+    
+    m_dateFormatter = CFDateFormatterCreate(NULL, NULL, kCFDateFormatterMediumStyle, kCFDateFormatterMediumStyle);
+    
+    //m_recordQueue = dispatch_queue_create("com.magicud.record", NULL);
 }
 
 Audio_Stream::~Audio_Stream()
@@ -146,6 +161,43 @@ Audio_Stream::~Audio_Stream()
     if (m_fileOutput) {
         delete m_fileOutput, m_fileOutput = 0;
     }
+    
+    /*if (m_recordQueue) {
+        dispatch_release(m_recordQueue);
+        m_recordQueue = NULL;
+    }*/
+    
+    if (m_recordDirectory) {
+        CFRelease(m_recordDirectory);
+        m_recordDirectory = NULL;
+    }
+    
+    if (m_recordFile) {
+        CFRelease(m_recordFile);
+        m_recordFile = NULL;
+    }
+    
+    if (m_dateFormatter) {
+        CFRelease(m_dateFormatter);
+        m_dateFormatter = NULL;
+    }
+    
+    if (m_magicCookie) {
+        delete m_magicCookie;
+        m_magicCookie = NULL;
+    }
+    
+    if (m_previousMetaData) {
+        releaseMetaData(m_previousMetaData);
+        delete m_previousMetaData;
+        m_previousMetaData = NULL;
+    }
+    
+    if (m_metaData) {
+        releaseMetaData(m_metaData);
+        delete m_metaData;
+        m_metaData = NULL;
+    }
 }
     
 void Audio_Stream::open()
@@ -173,6 +225,8 @@ void Audio_Stream::open(Input_Stream_Position *position)
     m_discontinuity = true;
     m_ignoreDecodeQueueSize = false;
     m_audioQueueConsumedPackets = false;
+    
+    m_parsedBytes = 0;
     
     if (m_watchdogTimer) {
         CFRunLoopTimerInvalidate(m_watchdogTimer);
@@ -298,12 +352,20 @@ void Audio_Stream::close(bool closeParser)
     m_queuedHead = m_queuedTail = 0, m_playPacket = 0;
     m_cachedDataSize = 0;
     
+    if (m_recording) {
+        stopRecording();
+    }
+    
     AS_TRACE("%s: leave\n", __PRETTY_FUNCTION__);
 }
     
 void Audio_Stream::pause()
 {
     audioQueue()->pause();
+    
+    if (m_recording) {
+        stopRecording();
+    }
 }
     
 void Audio_Stream::startCachedDataPlayback()
@@ -1027,9 +1089,83 @@ void Audio_Stream::streamErrorOccurred(CFStringRef errorDesc)
     
 void Audio_Stream::streamMetaDataAvailable(std::map<CFStringRef,CFStringRef> metaData)
 {
+    CFStringRef streamTitle = findStreamTitle(&metaData);
+    if (streamTitle) {
+        CFStringRef previousStreamTitle = findStreamTitle(m_previousMetaData);
+        if (previousStreamTitle == NULL || CFStringCompare(streamTitle, previousStreamTitle, 0) != kCFCompareEqualTo) {
+            if (m_previousMetaData && m_previousMetaData != m_metaData) {
+                delete m_previousMetaData;
+                m_previousMetaData = NULL;
+            }
+            
+            m_previousMetaData = m_metaData;
+            m_readTrackBytes = m_bytesReceived;
+        }
+        
+        m_metaData = new std::map<CFStringRef, CFStringRef>();
+        for (std::map<CFStringRef, CFStringRef>::iterator iter = metaData.begin(); iter != metaData.end(); iter++) {
+            CFStringRef key = CFStringCreateCopy(NULL, iter->first);
+            CFStringRef value = CFStringCreateCopy(NULL, iter->second);
+            (*m_metaData)[key] = value;
+        }
+    }
+    
     if (m_delegate) {
         m_delegate->audioStreamMetaDataAvailable(metaData);
     }
+}
+    
+bool Audio_Stream::startRecording(CFStringRef recordDirectory)
+{
+    if (recordDirectory == NULL) {
+        return false;
+    }
+    
+    if (m_state != PLAYING
+        && m_state != BUFFERING) {
+        return false;
+    }
+    
+    if (m_recordDirectory != NULL) {
+        CFRelease(m_recordDirectory);
+        m_recordDirectory = NULL;
+    }
+    m_recordDirectory = CFStringCreateCopy(NULL, recordDirectory);
+    
+    if (m_recording) {
+        return false;
+    }
+    
+    OSStatus status = prepareForRecording();
+    if (status != noErr) {
+        return false;
+    }
+    
+    m_recording = true;
+    m_readTrackBytes = LLONG_MAX;
+    m_currentPacketRecording = 0;
+    
+    return true;
+}
+    
+void Audio_Stream::stopRecording()
+{
+    if (m_recording) {
+        m_recording = false;
+        m_previousMetaData = m_metaData;
+        //m_metaData = NULL;
+        handleRecordingTrack(true);
+    }
+}
+
+bool Audio_Stream::isRecording()
+{
+    return m_recording;
+}
+    
+void  Audio_Stream::setRecordingTrackEnabled(bool enabled)
+{
+    m_RecordingTrackEnabled = enabled;
 }
     
 /* private */
@@ -1160,7 +1296,9 @@ void Audio_Stream::setCookiesForStream(AudioFileStreamID inAudioFileStream)
         AudioConverterSetProperty(m_audioConverter, kAudioConverterDecompressionMagicCookie, cookieSize, cookieData);
     }
     
-    free(cookieData);
+    //free(cookieData);
+    m_magicCookieSize = cookieSize;
+    m_magicCookie = (UInt8 *)cookieData;
 }
     
 float Audio_Stream::bitrate()
@@ -1572,6 +1710,20 @@ void Audio_Stream::propertyValueCallback(void *inClientData, AudioFileStreamID i
             THIS->audioQueue()->init();
             break;
         }
+        case kAudioFileStreamProperty_MagicCookieData: {
+            if (THIS->m_magicCookie != NULL) {
+                free(THIS->m_magicCookie);
+                THIS->m_magicCookie = NULL;
+            }
+            
+            THIS->m_magicCookieSize = 0;
+            AudioFileStreamGetPropertyInfo(inAudioFileStream, kAudioFileStreamProperty_MagicCookieData, &THIS->m_magicCookieSize, NULL);
+            if (THIS->m_magicCookieSize) {
+                THIS->m_magicCookie = (UInt8 *)calloc(THIS->m_magicCookieSize, sizeof(UInt8));
+                AudioFileStreamGetProperty(inAudioFileStream, kAudioFileStreamProperty_MagicCookieData, &THIS->m_magicCookieSize, THIS->m_magicCookie);
+            }
+            break;
+        }
         default: {
             break;
         }
@@ -1585,6 +1737,8 @@ void Audio_Stream::streamDataCallback(void *inClientData, UInt32 inNumberBytes, 
     
     Stream_Configuration *config = Stream_Configuration::configuration();
     Audio_Stream *THIS = static_cast<Audio_Stream*>(inClientData);
+    
+    THIS->handleDataForRecording(inNumberBytes, inNumberPackets, inInputData, inPacketDescriptions);
     
     if (!THIS->m_audioStreamParserRunning) {
         AS_TRACE("%s: stray callback detected!\n", __PRETTY_FUNCTION__);
@@ -1636,6 +1790,226 @@ void Audio_Stream::streamDataCallback(void *inClientData, UInt32 inNumberBytes, 
     }
     
     THIS->enqueueCachedData(config->decodeQueueSize);
+}
+    
+void Audio_Stream::releaseMetaData(std::map<CFStringRef, CFStringRef> *metaData)
+{
+    if (metaData == NULL) {
+        return;
+    }
+    for (std::map<CFStringRef, CFStringRef>::iterator iter = metaData->begin(); iter != metaData->end(); iter++) {
+        CFRelease(iter->first);
+        CFRelease(iter->second);
+    }
+}
+    
+CFStringRef Audio_Stream::findStreamTitle(std::map<CFStringRef, CFStringRef> *metaData)
+{
+    if (metaData == NULL) {
+        return NULL;
+    }
+    for (std::map<CFStringRef, CFStringRef>::iterator iter = metaData->begin(); iter != metaData->end(); iter++) {
+        if (CFStringCompare(iter->first, m_streamTitleKey, 0) == kCFCompareEqualTo) {
+            return iter->second;
+        }
+    }
+    return NULL;
+}
+    
+void Audio_Stream::handleDataForRecording(UInt32 inNumberBytes, UInt32 inNumberPackets, const void *inInputData, AudioStreamPacketDescription *inPacketDescriptions)
+{
+    writeDataForRecording(inNumberBytes, inNumberPackets, inInputData, inPacketDescriptions);
+    /*dispatch_sync(m_recordQueue, ^{
+        this->writeDataForRecording(inNumberBytes, inNumberPackets, inInputData, inPacketDescriptions);
+    });*/
+}
+    
+void Audio_Stream::writeDataForRecording(UInt32 inNumberBytes, UInt32 inNumberPackets, const void *inInputData, AudioStreamPacketDescription *inPacketDescriptions)
+{
+    //bool isMainThread = (dispatch_get_current_queue() == dispatch_get_main_queue());
+    m_parsedBytes += inNumberBytes;
+    
+    if (m_recording && m_audioFileRecording) {
+        OSStatus status = AudioFileWritePackets(m_audioFileRecording,
+                                                false,
+                                                inNumberBytes,
+                                                inPacketDescriptions,
+                                                m_currentPacketRecording,
+                                                &inNumberPackets,
+                                                inInputData);
+        if(status == noErr)
+        {
+            m_currentPacketRecording += inNumberPackets;
+            if (m_RecordingTrackEnabled && m_previousMetaData && m_parsedBytes>=m_readTrackBytes) {
+                m_readTrackBytes = LLONG_MAX;  //to prevent save many times
+                handleRecordingTrack(false);
+            }
+        }
+        else {
+            handleRecordingError(status);
+        }
+    }
+}
+    
+CFStringRef Audio_Stream::audioFileExtensionFromContentType(CFStringRef contentType) {
+    CFStringRef fileExtensionHint = CFSTR("mp3");
+    
+    if (!contentType) {
+        AS_TRACE("***** Unable to detect the audio stream type: missing content-type! *****\n");
+        goto out;
+    }
+    
+    if (CFStringCompare(contentType, CFSTR("audio/mpeg"), 0) == kCFCompareEqualTo) {
+        fileExtensionHint = CFSTR("mp3");
+    } else if (CFStringCompare(contentType, CFSTR("audio/x-wav"), 0) == kCFCompareEqualTo) {
+        fileExtensionHint = CFSTR("wav");
+    } else if (CFStringCompare(contentType, CFSTR("audio/x-aifc"), 0) == kCFCompareEqualTo) {
+        fileExtensionHint = CFSTR("aif");
+    } else if (CFStringCompare(contentType, CFSTR("audio/x-aiff"), 0) == kCFCompareEqualTo) {
+        fileExtensionHint = CFSTR("aif");
+    } else if (CFStringCompare(contentType, CFSTR("audio/x-m4a"), 0) == kCFCompareEqualTo) {
+        fileExtensionHint = CFSTR("m4a");
+    } else if (CFStringCompare(contentType, CFSTR("audio/mp4"), 0) == kCFCompareEqualTo ||
+               CFStringCompare(contentType, CFSTR("video/mp4"), 0) == kCFCompareEqualTo) {
+        fileExtensionHint = CFSTR("mp4");
+    } else if (CFStringCompare(contentType, CFSTR("audio/x-caf"), 0) == kCFCompareEqualTo) {
+        fileExtensionHint = CFSTR("caf");
+    } else if (CFStringCompare(contentType, CFSTR("audio/aac"), 0) == kCFCompareEqualTo ||
+               CFStringCompare(contentType, CFSTR("audio/aacp"), 0) == kCFCompareEqualTo) {
+        fileExtensionHint = CFSTR("aac");
+    } else {
+    }
+    
+out:
+    return fileExtensionHint;
+}
+    
+CFStringRef Audio_Stream::currentDate()
+{
+    return CFDateFormatterCreateStringWithAbsoluteTime(NULL, m_dateFormatter, CFAbsoluteTimeGetCurrent());
+}
+    
+OSStatus Audio_Stream::writeMagicCookieToRecordingFile()
+{
+    OSStatus status = noErr;
+    if (m_magicCookie && m_magicCookieSize && m_audioFileRecording) {
+        UInt32 willEatTheCookie = false;
+        OSStatus status = AudioFileGetPropertyInfo(m_audioFileRecording, kAudioFilePropertyMagicCookieData, NULL, &willEatTheCookie);
+        if (status == noErr && willEatTheCookie) {
+            status = AudioFileSetProperty(m_audioFileRecording, kAudioFilePropertyMagicCookieData,m_magicCookieSize, m_magicCookie);
+            return status;
+        }
+    }
+    return status;
+}
+    
+void Audio_Stream::handleRecordingTrack(bool finish)
+{
+    OSStatus status = writeMagicCookieToRecordingFile();
+    if (status == noErr) {
+        status = AudioFileClose(m_audioFileRecording);
+        m_audioFileRecording = NULL;
+    }
+    if (status == noErr) {
+        if (m_delegate) {
+            m_delegate->audioStreamDidRecordTrack(m_recordDirectory, m_recordFile, m_previousMetaData, finish);
+        }
+        
+        if (finish) {
+            clearAfterRecording();
+        }
+        else {
+            status = prepareForRecording();
+            if (status != noErr && m_delegate) {
+                handleRecordingError(status);
+            }
+        }
+    }
+    
+    m_previousMetaData = NULL;
+}
+    
+void Audio_Stream::handleRecordingError(OSStatus status)
+{
+    m_recording = false;
+    clearAfterRecording();
+    
+    if (m_delegate) {
+        m_delegate->audioStreamRecordingErrorOccurred(status);
+    }
+}
+    
+OSStatus Audio_Stream::prepareForRecording()
+{
+    if (m_recordDirectory == NULL) {
+        return -1;
+    }
+    
+    CFStringRef extension = audioFileExtensionFromContentType(m_contentType ? m_contentType : m_defaultContentType);
+    if (!extension) {
+        return -1;
+    }
+    if (m_recordFile) {
+        CFRelease(m_recordFile);
+        m_recordFile = NULL;
+    }
+    CFStringRef fileName = currentDate();
+    if (!fileName) {
+        return -1;
+    }
+    m_recordFile = CFStringCreateWithFormat(NULL, NULL, CFSTR("%@.%@"), fileName, extension);
+    if (!m_recordFile) {
+        return -1;
+    }
+    CFStringRef path = CFStringCreateWithFormat(NULL, NULL, CFSTR("%@/%@"), m_recordDirectory, m_recordFile);
+    if (!path) {
+        return -1;
+    }
+    CFRelease(fileName);
+    CFRelease(extension);
+    
+    CFStringRef pathEscaped = CFURLCreateStringByAddingPercentEscapes(NULL, path, NULL, NULL, kCFStringEncodingUTF8);
+    if (!pathEscaped) {
+        return -1;
+    }
+    CFRelease(path);
+    
+    CFURLRef pathURL = CFURLCreateWithString(NULL, pathEscaped, NULL);
+    if (!pathURL) {
+        return -1;
+    }
+    CFRelease(pathEscaped);
+    
+    OSStatus status = AudioFileCreateWithURL(pathURL,audioStreamTypeFromContentType(m_contentType ? m_contentType : m_defaultContentType),&m_srcFormat,kAudioFileFlags_EraseFile,&m_audioFileRecording);
+    CFRelease(pathURL);
+    
+    if (status != noErr) {
+        return status;
+    }
+    
+    status = writeMagicCookieToRecordingFile();
+    m_currentPacketRecording = 0;
+
+    return status;
+}
+    
+void Audio_Stream::clearAfterRecording()
+{
+    if (m_audioFileRecording) {
+        AudioFileClose(m_audioFileRecording);
+        m_audioFileRecording = NULL;
+    }
+    if (m_recordDirectory) {
+        CFRelease(m_recordDirectory);
+        m_recordDirectory = NULL;
+    }
+    if (m_recordFile) {
+        CFRelease(m_recordFile);
+        m_recordFile = NULL;
+    }
+    if (m_magicCookie) {
+        free(m_magicCookie);
+    }
 }
 
 } // namespace astreamer

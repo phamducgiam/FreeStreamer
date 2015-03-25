@@ -303,6 +303,26 @@ NSString*             freeStreamerReleaseVersion();
 - (void)expungeCache;
 
 /**
+ * start recording and track will be written in given directory
+ */
+- (BOOL)startRecording:(NSString *)recordDirectory;
+
+/**
+ * stop recording
+ */
+- (void)stopRecording;
+
+/**
+ * check if stream is recording
+ */
+- (BOOL)isRecording;
+
+/**
+ * set recording track enabled
+ */
+- (void)setRecordingTrackEnabled:(BOOL)enabled;
+
+/**
  * The stream URL.
  */
 @property (nonatomic,assign) NSURL *url;
@@ -408,6 +428,16 @@ NSString*             freeStreamerReleaseVersion();
  * Delegate.
  */
 @property (nonatomic,unsafe_unretained) IBOutlet id<FSPCMAudioStreamDelegate> delegate;
+
+/**
+ * Called upon a track is recorded
+ */
+@property (copy) void (^onRecordTrackAvailable)(NSString *recordDirectory, NSString *recordFile, NSDictionary *metadata, BOOL finish);
+
+/**
+ * Called upon a record error occurred
+ */
+@property (copy) void (^onRecordError)(NSError *error);
 
 @end
 
