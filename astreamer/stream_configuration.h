@@ -34,6 +34,8 @@ struct Stream_Configuration {
     bool seekingFromCacheEnabled;
     int maxDiskCacheSize;
     
+    int requiredPrebufferedSecondsForContinuousStream;
+    
     static Stream_Configuration *configuration();
     
 private:

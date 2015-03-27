@@ -32,6 +32,9 @@
 #define AS_TRACE(...) printf("[audio_stream.cpp:%i thread %x] ", __LINE__, pthread_mach_thread_np(pthread_self())); printf(__VA_ARGS__)
 #endif
 
+/*#include <pthread.h>
+#define MG_AS_TRACE(...) printf("[audio_stream.cpp:%i thread %x] ", __LINE__, pthread_mach_thread_np(pthread_self())); printf(__VA_ARGS__)*/
+
 namespace astreamer {
     
 static CFStringRef coreAudioErrorToCFString(CFStringRef basicErrorDescription, OSStatus error)
@@ -111,7 +114,9 @@ Audio_Stream::Audio_Stream() :
     m_recordDirectory(NULL),
     m_recordFile(NULL),
     m_magicCookie(NULL),
-    m_audioFileRecording(NULL)
+    m_audioFileRecording(NULL),
+    m_waitForBuffer(true),
+    m_prebufferedSize(0)
 {
     memset(&m_srcFormat, 0, sizeof m_srcFormat);
     
@@ -430,10 +435,13 @@ void Audio_Stream::seekToOffset(float offset)
     if (state() != PLAYING) {
         // Do not allow seeking if we are not currently playing the stream
         // This allows a previous seek to be completed
-        AS_TRACE("the stream is not playing, disallowing this seek\n");
-        
         return;
     }
+    
+    m_inputStream->setScheduledInRunLoop(false);
+    
+    // Close the audio queue so that it won't ask any more data
+    closeAudioQueue();
     
     setState(SEEKING);
     
@@ -491,22 +499,6 @@ void Audio_Stream::seekToOffset(float offset)
         AS_TRACE("Seeking from cache disabled\n");
     }
     
-    // Check if this cache lookup actually gives us a reasonable buffer
-    if (foundCachedPacket) {
-        int count = 0;
-        queued_packet_t *cur = seekPacket;
-        while (cur) {
-            cur = cur->next;
-            count++;
-        }
-        
-        if (count < config->decodeQueueSize) {
-            AS_TRACE("The seeked region too close to the end of the buffer, reopening the stream, count %i\n", count);
-            
-            foundCachedPacket = false;
-        }
-    }
-    
     if (!foundCachedPacket) {
         AS_TRACE("Seeked packet not found from cache, reopening the input stream\n");
         
@@ -528,30 +520,27 @@ void Audio_Stream::seekToOffset(float offset)
             setContentLength(originalContentLength);
             
             m_inputStreamRunning = true;
-            
-            audioQueue()->init();
-            
-            setState(BUFFERING);
+
         } else {
             closeAndSignalError(AS_ERR_OPEN, CFSTR("Input stream open error"));
+            return;
         }
     } else {
         AS_TRACE("Seeked packet found from cache!\n");
         
         // Found the packet from the cache, let's use the cache directly.
-        m_inputStream->setScheduledInRunLoop(false);
-        
-        closeAudioQueue();
         
         m_playPacket    = seekPacket;
         m_discontinuity = true;
         
         setSeekOffset(offset);
-        
-        audioQueue()->init();
-        
-        m_inputStream->setScheduledInRunLoop(true);
     }
+    
+    audioQueue()->init();
+    
+    setState(BUFFERING);
+    
+    m_inputStream->setScheduledInRunLoop(true);
 }
     
 Input_Stream_Position Audio_Stream::streamPositionForOffset(float offset)
@@ -1342,6 +1331,10 @@ void Audio_Stream::audioQueueTimerCallback(CFRunLoopTimerRef timer, void *info)
     AS_TRACE("audioQueueTimerCallback called\n");
     
     Audio_Stream *THIS = (Audio_Stream *)info;
+
+    if (THIS->state() == SEEKING || THIS->state() == PAUSED) {
+        return;
+    }
     
     if (THIS->m_inputStreamRunning) {
         /* We are not needed, the input stream will drive the queue */
@@ -1379,6 +1372,24 @@ int Audio_Stream::playbackDataCount()
     return count;
 }
     
+int Audio_Stream::audioQueueNumberOfBuffersInUse()
+{
+    int count = 0;
+    if (m_audioQueue) {
+        count = audioQueue()->numberOfBuffersInUse();
+    }
+    return count;
+}
+    
+int Audio_Stream::audioQueuePacketCount()
+{
+    int count = 0;
+    if (m_audioQueue) {
+        count = audioQueue()->packetCount();
+    }
+    return count;
+}
+    
 void Audio_Stream::enqueueCachedData(int minPacketsRequired)
 {
     if (!m_queueCanAcceptPackets) {
@@ -1406,7 +1417,7 @@ void Audio_Stream::enqueueCachedData(int minPacketsRequired)
         m_converterRunOutOfData = false;
     }
     
-    if (state() == PAUSED) {
+    if (state() == PAUSED || state() == SEEKING) {
         return;
     }
     
@@ -1460,7 +1471,25 @@ void Audio_Stream::enqueueCachedData(int minPacketsRequired)
         }
     }
     
-    if (!m_preloading && m_initialBufferingCompleted && (count > minPacketsRequired || m_ignoreDecodeQueueSize)) {
+    bool waitForBuffer = false;
+    if (continuous) {
+        if (m_prebufferedSize == 0) {
+            waitForBuffer = true;
+        }
+        else if (m_cachedDataSize >= m_prebufferedSize) {
+            m_waitForBuffer = false;
+        } else if (m_cachedDataSize < m_prebufferedSize / 10) {
+            m_waitForBuffer = true;
+            waitForBuffer = true;
+        }
+        else if (m_waitForBuffer) {
+            waitForBuffer = true;
+        }
+    }
+    
+    //MG_AS_TRACE("cache = %lu, prebuffered = %ld, wait = %d", m_cachedDataSize, m_prebufferedSize, waitForBuffer);
+    
+    if (!m_preloading && m_initialBufferingCompleted && (count > minPacketsRequired || m_ignoreDecodeQueueSize) && !waitForBuffer) {
         AudioBufferList outputBufferList;
         outputBufferList.mNumberBuffers = 1;
         outputBufferList.mBuffers[0].mNumberChannels = m_dstFormat.mChannelsPerFrame;
@@ -1625,6 +1654,9 @@ void Audio_Stream::propertyValueCallback(void *inClientData, AudioFileStreamID i
             if (err) {
                 THIS->m_bitRate = 0;
             }
+            else {
+                THIS->calculatePrebufferedSize();
+            }
             break;
         }
         case kAudioFileStreamProperty_DataOffset: {
@@ -1758,6 +1790,10 @@ void Audio_Stream::streamDataCallback(void *inClientData, UInt32 inNumberBytes, 
             // stable.
             
             THIS->m_bitrateBuffer[THIS->m_bitrateBufferIndex++] = 8 * inPacketDescriptions[i].mDataByteSize / THIS->m_packetDuration;
+        }
+        else if (THIS->m_bitrateBufferIndex == kAudioStreamBitrateBufferSize) {
+            THIS->calculateBitrate();
+            THIS->calculatePrebufferedSize();
         }
         
         /* Prepare the packet */
@@ -2010,6 +2046,22 @@ void Audio_Stream::clearAfterRecording()
     if (m_magicCookie) {
         free(m_magicCookie);
     }
+}
+    
+void Audio_Stream::calculateBitrate()
+{
+    double sum = 0;
+    
+    for (size_t i=0; i < kAudioStreamBitrateBufferSize; i++) {
+        sum += m_bitrateBuffer[i];
+    }
+    m_bitRate = round(sum / kAudioStreamBitrateBufferSize);
+}
+    
+void Audio_Stream::calculatePrebufferedSize()
+{
+    Stream_Configuration *config = Stream_Configuration::configuration();
+    m_prebufferedSize = roundf(m_bitRate * config->requiredPrebufferedSecondsForContinuousStream / 8);
 }
 
 } // namespace astreamer
