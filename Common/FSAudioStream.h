@@ -16,12 +16,12 @@
 /**
  * The minor version of the current release.
  */
-#define FREESTREAMER_VERSION_MINOR          10
+#define FREESTREAMER_VERSION_MINOR          12
 
 /**
  * The reversion of the current release
  */
-#define FREESTREAMER_VERSION_REVISION       3
+#define FREESTREAMER_VERSION_REVISION       6
 
 /**
  * Follow this notification for the audio stream state changes.
@@ -53,6 +53,9 @@ typedef enum {
     kFsAudioStreamSeeking,
     kFSAudioStreamEndOfFile,
     kFsAudioStreamFailed,
+    kFsAudioStreamRetryingStarted,
+    kFsAudioStreamRetryingSucceeded,
+    kFsAudioStreamRetryingFailed,
     kFsAudioStreamPlaybackCompleted,
     kFsAudioStreamUnknownState
 } FSAudioStreamState;
@@ -188,6 +191,35 @@ typedef struct {
  * The maximum size of the disk cache in bytes.
  */
 @property (nonatomic,assign) int maxDiskCacheSize;
+
+@end
+
+/**
+ * Statistics on the stream state.
+ */
+@interface FSStreamStatistics : NSObject {
+}
+
+/**
+ * Time when the statistics were gathered.
+ */
+@property (nonatomic,strong) NSDate *snapshotTime;
+/**
+ * Time in a pretty format.
+ */
+@property (nonatomic,readonly) NSString *snapshotTimeFormatted;
+/**
+ * Audio stream packet count.
+ */
+@property (nonatomic,assign) NSUInteger audioStreamPacketCount;
+/**
+ * Audio queue used buffers count.
+ */
+@property (nonatomic,assign) NSUInteger audioQueueUsedBufferCount;
+/**
+ * Audio stream PCM packet queue count.
+ */
+@property (nonatomic,assign) NSUInteger audioQueuePCMPacketQueueCount;
 
 @end
 
@@ -403,6 +435,15 @@ NSString*             freeStreamerReleaseVersion();
  * The current size of the disk cache.
  */
 @property (nonatomic,readonly) unsigned long long totalCachedObjectsSize;
+/**
+ * The property determines the amount of times the stream has tried to retry the playback
+ * in case of failure.
+ */
+@property (nonatomic,readonly) NSUInteger retryCount;
+/**
+ * This property holds the current statistics for the stream state.
+ */
+@property (nonatomic,readonly) FSStreamStatistics *statistics;
 /**
  * Called upon completion of the stream. Note that for continuous
  * streams this is never called.

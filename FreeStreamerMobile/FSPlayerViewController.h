@@ -8,12 +8,13 @@
 
 #import <UIKit/UIKit.h>
 
-#import "FSAudioStream.h"
+#import "FSAudioController.h"
 
+@class FSAudioStream;
 @class FSPlaylistItem;
-@class FSAudioController;
 @class FSFrequencyDomainAnalyzer;
 @class FSFrequencyPlotView;
+@class FSLogger;
 
 /**
  * The player view controller of the iOS example application.
@@ -21,36 +22,25 @@
  * The view allows the user to control the player. See the
  * play:, pause: and seek: actions.
  */
-@interface FSPlayerViewController : UIViewController <FSPCMAudioStreamDelegate> {
+@interface FSPlayerViewController : UIViewController <FSAudioControllerDelegate> {
     FSPlaylistItem *_selectedPlaylistItem;
     
     // State
-    BOOL _paused;
     BOOL _shouldStartPlaying;
     float _outputVolume;
     BOOL _analyzerEnabled;
     
-    // UI
-    NSTimer *_progressUpdateTimer;
-    NSTimer *_playbackSeekTimer;
-    NSTimer *_volumeRampTimer;
-    double _seekToPoint;
-    float _volumeBeforeRamping;
-    int _rampStep;
-    int _rampStepCount;
-    bool _rampUp;
-    SEL _postRampAction;
-    
     FSFrequencyDomainAnalyzer *_analyzer;
-    
-    NSURL *_stationURL;
-    UIBarButtonItem *_infoButton;
     
     FSAudioController *_controller;
     FSSeekByteOffset _lastSeekByteOffset;
     NSURL *_lastPlaybackURL;
+    FSStreamConfiguration *_configuration;
     
     float _maxPrebufferedByteCount;
+    
+    FSLogger *_stateLogger;
+    FSLogger *_bufferStatLogger;
 }
 
 /**
@@ -102,6 +92,10 @@
  */
 @property (nonatomic,strong) IBOutlet UILabel *currentPlaybackTime;
 /**
+ * Reference to the label displaying the current playback time.
+ */
+@property (nonatomic,strong) IBOutlet UILabel *snapshotLabel;
+/**
  * Reference to the audio controller.
  */
 @property (nonatomic,strong) FSAudioController *audioController;
@@ -117,6 +111,10 @@
  * Reference to the prebuffer status.
  */
 @property (nonatomic,strong) IBOutlet UIView *prebufferStatus;
+/**
+ * Reference to the stream configuration.
+ */
+@property (nonatomic,strong) FSStreamConfiguration *configuration;
 /**
  * Handles the notification upon entering background.
  *

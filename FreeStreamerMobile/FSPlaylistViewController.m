@@ -11,6 +11,7 @@
 #import "FSPlayerViewController.h"
 #import "FSParseRssPodcastFeedRequest.h"
 #import "AJNotificationView.h"
+#include "FSAudioController.h"
 
 @interface FSPlaylistViewController (PrivateMethods)
 
@@ -56,6 +57,8 @@
 {
     [super viewDidLoad];
     
+    _configuration = [[FSStreamConfiguration alloc] init];
+    
     self.userPlaylistItems = [[NSMutableArray alloc] init];
     
     __weak FSPlaylistViewController *weakSelf = self;
@@ -88,6 +91,8 @@
     self.navigationController.navigationBar.barStyle = UIBarStyleDefault;
     self.navigationController.navigationBarHidden = NO;
     
+    self.navigationController.navigationBar.topItem.title = [[NSString alloc] initWithFormat:@"FreeStreamer %i.%i.%i", FREESTREAMER_VERSION_MAJOR, FREESTREAMER_VERSION_MINOR, FREESTREAMER_VERSION_REVISION];
+    
     self.view.backgroundColor = [UIColor whiteColor];
 }
 
@@ -115,6 +120,35 @@
     [alert show];
 }
 
+- (IBAction)selectBufferSize:(id)sender
+{
+    UISegmentedControl *segmentedControl = sender;
+    
+    _configuration = [[FSStreamConfiguration alloc] init];
+    
+    switch ([segmentedControl selectedSegmentIndex]) {
+        case 1:
+            // 0 KB
+            _configuration.requiredInitialPrebufferedByteCountForContinuousStream = 0;
+            _configuration.requiredInitialPrebufferedByteCountForNonContinuousStream = 0;
+            break;
+        case 2:
+            // 100 KB
+            _configuration.requiredInitialPrebufferedByteCountForContinuousStream = 100000;
+            _configuration.requiredInitialPrebufferedByteCountForNonContinuousStream = 100000;
+            break;
+        case 3:
+            // 200 KB
+            _configuration.requiredInitialPrebufferedByteCountForContinuousStream = 200000;
+            _configuration.requiredInitialPrebufferedByteCountForNonContinuousStream = 200000;
+            break;
+            
+        default:
+            // Use defaults
+            break;
+    }
+}
+
 /*
  * =======================================
  * Alert view delegate
@@ -131,7 +165,7 @@
     
     FSPlaylistItem *item = [[FSPlaylistItem alloc] init];
     item.title = url;
-    item.url = url;
+    item.url = [NSURL URLWithString:url];
     
     for (FSPlaylistItem *existingItem in self.userPlaylistItems) {
         if ([existingItem isEqual:item]) {
@@ -179,7 +213,8 @@
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath
 {
 	FSPlaylistItem *item = [self playlistItems][indexPath.row];
-    
+
+    self.playerViewController.configuration = _configuration;
     self.playerViewController.selectedPlaylistItem = item;
     self.playerViewController.shouldStartPlaying = YES;
     
