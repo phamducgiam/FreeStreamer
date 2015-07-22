@@ -187,6 +187,16 @@
 - (void)setRecordingTrackEnabled:(BOOL)enabled;
 
 /**
+ * Returns the playback status: YES if the stream is pausing, NO otherwise.
+ */
+- (BOOL)isPausing;
+
+/**
+ * Returns the playback status: YES if the stream is buffering, NO otherwise.
+ */
+- (BOOL)isBuffering;
+
+/**
  * This property holds the current playback volume of the stream,
  * from 0.0 to 1.0.
  *

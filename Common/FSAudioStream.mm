@@ -311,6 +311,7 @@ public:
 - (void)setRecordingTrackEnabled:(BOOL)enabled;
 
 - (BOOL)isRunning;
+- (BOOL)isPausing;
 - (BOOL)isBuffering;
 
 - (void)bitrateAvailable;
@@ -1098,6 +1099,12 @@ public:
             || state == astreamer::Audio_Stream::State::SEEKING);
 }
 
+- (BOOL)isPausing
+{
+    astreamer::Audio_Stream::State state = _audioStream->state();
+    return (state == astreamer::Audio_Stream::State::PAUSED);
+}
+
 - (BOOL)isBuffering
 {
     astreamer::Audio_Stream::State state = _audioStream->state();
@@ -1710,6 +1717,11 @@ public:
 - (BOOL)isRunning
 {
     return [_private isRunning];
+}
+
+- (BOOL)isPausing
+{
+    return [_private isPausing];
 }
 
 - (BOOL)isBuffering

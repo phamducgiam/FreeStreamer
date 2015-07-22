@@ -377,6 +377,11 @@ NSString*             freeStreamerReleaseVersion();
 - (BOOL)isRunning;
 
 /**
+ * Returns the playback status: YES if the stream is pausing, NO otherwise.
+ */
+- (BOOL)isPausing;
+
+/**
  * Returns the playback status: YES if the stream is buffering, NO otherwise.
  */
 - (BOOL)isBuffering;
