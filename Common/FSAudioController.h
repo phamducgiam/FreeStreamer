@@ -187,6 +187,11 @@
 - (void)setRecordingTrackEnabled:(BOOL)enabled;
 
 /**
+ * Returns the playback status: YES if the stream is running, NO otherwise.
+ */
+- (BOOL)isRunning;
+
+/**
  * Returns the playback status: YES if the stream is pausing, NO otherwise.
  */
 - (BOOL)isPausing;

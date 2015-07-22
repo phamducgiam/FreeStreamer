@@ -759,6 +759,11 @@ NSString* const RECORD_DIRECTORY = @"com.magicud.record";
     [self.audioStream setRecordingTrackEnabled:enabled];
 }
 
+- (BOOL)isRunning
+{
+    return [self.audioStream isRunning];
+}
+
 - (BOOL)isPausing
 {
     return [self.audioStream isPausing];
