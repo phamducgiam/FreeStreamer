@@ -191,6 +191,10 @@ typedef struct {
  * The maximum size of the disk cache in bytes.
  */
 @property (nonatomic,assign) int maxDiskCacheSize;
+/**
+ * Require buffering of this many bytes before the playback can start a non-continuous stream.
+ */
+@property (nonatomic,assign) int      requiredPrebufferedSecondsForContinuousStream;
 
 @end
 
@@ -353,6 +357,16 @@ NSString*             freeStreamerReleaseVersion();
  * set recording track enabled
  */
 - (void)setRecordingTrackEnabled:(BOOL)enabled;
+
+/**
+ * Returns the playback status: YES if the stream is running, NO otherwise.
+ */
+- (BOOL)isRunning;
+
+/**
+ * Returns the playback status: YES if the stream is buffering, NO otherwise.
+ */
+- (BOOL)isBuffering;
 
 /**
  * The stream URL.

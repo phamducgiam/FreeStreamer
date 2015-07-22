@@ -95,6 +95,7 @@ static NSInteger sortCacheObjects(id co1, id co2, void *keyForSorting)
         self.maxDiskCacheSize = 256000000; // 256 MB
         self.requiredInitialPrebufferedByteCountForContinuousStream = 100000;
         self.requiredInitialPrebufferedByteCountForNonContinuousStream = 50000;
+        self.requiredPrebufferedSecondsForContinuousStream = 3;
         
         NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
         
@@ -294,6 +295,10 @@ public:
 - (void)stopRecording;
 - (BOOL)isRecording;
 - (void)setRecordingTrackEnabled:(BOOL)enabled;
+
+- (BOOL)isRunning;
+- (BOOL)isBuffering;
+
 @end
 
 @implementation FSAudioStreamPrivate
@@ -1037,6 +1042,21 @@ public:
     _audioStream->setRecordingTrackEnabled(enabled);
 }
 
+- (BOOL)isRunning
+{
+    astreamer::Audio_Stream::State state = _audioStream->state();
+    return (state == astreamer::Audio_Stream::State::PLAYING
+            || state == astreamer::Audio_Stream::State::BUFFERING
+            || state == astreamer::Audio_Stream::State::PAUSED
+            || state == astreamer::Audio_Stream::State::SEEKING);
+}
+
+- (BOOL)isBuffering
+{
+    astreamer::Audio_Stream::State state = _audioStream->state();
+    return (state == astreamer::Audio_Stream::State::BUFFERING);
+}
+
 -(NSString *)description
 {
     return [NSString stringWithFormat:@"[FreeStreamer %@] URL: %@\nbufferCount: %i\nbufferSize: %i\nmaxPacketDescs: %i\ndecodeQueueSize: %i\nhttpConnectionBufferSize: %i\noutputSampleRate: %f\noutputNumChannels: %ld\nbounceInterval: %i\nmaxBounceCount: %i\nstartupWatchdogPeriod: %i\nmaxPrebufferedByteCount: %i\nformat: %@\nuserAgent: %@\ncacheDirectory: %@\npredefinedHttpHeaderValues: %@\ncacheEnabled: %@\nseekingFromCacheEnabled: %@\nmaxDiskCacheSize: %i\nrequiredInitialPrebufferedByteCountForContinuousStream: %i\nrequiredInitialPrebufferedByteCountForNonContinuousStream: %i",
@@ -1119,6 +1139,13 @@ public:
         c->maxDiskCacheSize         = configuration.maxDiskCacheSize;
         c->requiredInitialPrebufferedByteCountForContinuousStream = configuration.requiredInitialPrebufferedByteCountForContinuousStream;
         c->requiredInitialPrebufferedByteCountForNonContinuousStream = configuration.requiredInitialPrebufferedByteCountForNonContinuousStream;
+        if (configuration.requiredPrebufferedSecondsForContinuousStream > 3) {
+            c->requiredPrebufferedSecondsForContinuousStream = configuration.requiredPrebufferedSecondsForContinuousStream;
+        }
+        else {
+            c->requiredPrebufferedSecondsForContinuousStream = 3;
+        }
+        
         
         if (c->userAgent) {
             CFRelease(c->userAgent);
@@ -1570,6 +1597,16 @@ public:
 - (void)setRecordingTrackEnabled:(BOOL)enabled
 {
     [_private setRecordingTrackEnabled:enabled];
+}
+
+- (BOOL)isRunning
+{
+    return [_private isRunning];
+}
+
+- (BOOL)isBuffering
+{
+    return [_private isBuffering];
 }
 
 @end

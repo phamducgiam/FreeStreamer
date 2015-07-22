@@ -243,6 +243,12 @@ private:
     void handleRecordingError(OSStatus status);
     OSStatus prepareForRecording();
     void clearAfterRecording();
+    
+    //buffer
+    bool m_waitForBuffer;
+    UInt32 m_prebufferedSize;
+    void calculateBitrate();
+    void calculatePrebufferedSize();
 };
     
 class Audio_Stream_Delegate {

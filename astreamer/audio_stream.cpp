@@ -32,6 +32,9 @@
 #define AS_TRACE(...) printf("[audio_stream.cpp:%i thread %x] ", __LINE__, pthread_mach_thread_np(pthread_self())); printf(__VA_ARGS__)
 #endif
 
+/*#include <pthread.h>
+#define MG_AS_TRACE(...) printf("[audio_stream.cpp:%i thread %x] ", __LINE__, pthread_mach_thread_np(pthread_self())); printf(__VA_ARGS__)*/
+
 namespace astreamer {
     
 static CFStringRef coreAudioErrorToCFString(CFStringRef basicErrorDescription, OSStatus error)
@@ -111,7 +114,9 @@ Audio_Stream::Audio_Stream() :
     m_recordDirectory(NULL),
     m_recordFile(NULL),
     m_magicCookie(NULL),
-    m_audioFileRecording(NULL)
+    m_audioFileRecording(NULL),
+    m_waitForBuffer(true),
+    m_prebufferedSize(0)
 {
     memset(&m_srcFormat, 0, sizeof m_srcFormat);
     
@@ -1466,7 +1471,25 @@ void Audio_Stream::enqueueCachedData(int minPacketsRequired)
         }
     }
     
-    if (!m_preloading && m_initialBufferingCompleted && (count > minPacketsRequired || m_ignoreDecodeQueueSize)) {
+    bool waitForBuffer = false;
+    if (continuous) {
+        if (m_prebufferedSize == 0) {
+            waitForBuffer = true;
+        }
+        else if (m_cachedDataSize >= m_prebufferedSize) {
+            m_waitForBuffer = false;
+        } else if (m_cachedDataSize < m_prebufferedSize / 10) {
+            m_waitForBuffer = true;
+            waitForBuffer = true;
+        }
+        else if (m_waitForBuffer) {
+            waitForBuffer = true;
+        }
+    }
+    
+    //MG_AS_TRACE("cache = %lu, prebuffered = %ld, wait = %d", m_cachedDataSize, m_prebufferedSize, waitForBuffer);
+    
+    if (!m_preloading && m_initialBufferingCompleted && (count > minPacketsRequired || m_ignoreDecodeQueueSize) && !waitForBuffer) {
         AudioBufferList outputBufferList;
         outputBufferList.mNumberBuffers = 1;
         outputBufferList.mBuffers[0].mNumberChannels = m_dstFormat.mChannelsPerFrame;
@@ -1631,6 +1654,9 @@ void Audio_Stream::propertyValueCallback(void *inClientData, AudioFileStreamID i
             if (err) {
                 THIS->m_bitRate = 0;
             }
+            else {
+                THIS->calculatePrebufferedSize();
+            }
             break;
         }
         case kAudioFileStreamProperty_DataOffset: {
@@ -1764,6 +1790,10 @@ void Audio_Stream::streamDataCallback(void *inClientData, UInt32 inNumberBytes, 
             // stable.
             
             THIS->m_bitrateBuffer[THIS->m_bitrateBufferIndex++] = 8 * inPacketDescriptions[i].mDataByteSize / THIS->m_packetDuration;
+        }
+        else if (THIS->m_bitrateBufferIndex == kAudioStreamBitrateBufferSize) {
+            THIS->calculateBitrate();
+            THIS->calculatePrebufferedSize();
         }
         
         /* Prepare the packet */
@@ -2016,6 +2046,22 @@ void Audio_Stream::clearAfterRecording()
     if (m_magicCookie) {
         free(m_magicCookie);
     }
+}
+    
+void Audio_Stream::calculateBitrate()
+{
+    double sum = 0;
+    
+    for (size_t i=0; i < kAudioStreamBitrateBufferSize; i++) {
+        sum += m_bitrateBuffer[i];
+    }
+    m_bitRate = round(sum / kAudioStreamBitrateBufferSize);
+}
+    
+void Audio_Stream::calculatePrebufferedSize()
+{
+    Stream_Configuration *config = Stream_Configuration::configuration();
+    m_prebufferedSize = roundf(m_bitRate * config->requiredPrebufferedSecondsForContinuousStream / 8);
 }
 
 } // namespace astreamer

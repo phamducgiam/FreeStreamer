@@ -663,6 +663,9 @@
     } else if (self.selectedPlaylistItem.originatingUrl) {
         self.audioController.url = self.selectedPlaylistItem.originatingUrl;
     }
+    
+    //self.audioController.url = [NSURL URLWithString:@"http://air.radiorecord.ru:8101/rr_320"];
+    self.audioController.url = [NSURL URLWithString:@"http://sonorabangka.onlivestreaming.net:10110/"];
 }
 
 - (FSPlaylistItem *)selectedPlaylistItem
