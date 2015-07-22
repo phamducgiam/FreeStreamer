@@ -257,6 +257,27 @@ playback_short_file:
     [stream play];
 }
 
+- (void)testSettingBufferSizes
+{
+    FSStreamConfiguration *config = [[FSStreamConfiguration alloc] init];
+    config.usePrebufferSizeCalculationInSeconds = NO;
+    config.requiredInitialPrebufferedByteCountForContinuousStream = 123456;
+    
+    FSAudioStream *stream = [_stream initWithConfiguration:config];
+    
+    XCTAssertTrue((stream.configuration.usePrebufferSizeCalculationInSeconds == NO), @"Invalid configuration value for usePrebufferSizeCalculationInSeconds");
+    XCTAssertTrue((stream.configuration.requiredInitialPrebufferedByteCountForContinuousStream == 123456), @"Invalid configuration value for requiredInitialPrebufferedByteCountForContinuousStream");
+    
+    FSStreamConfiguration *config2 = [[FSStreamConfiguration alloc] init];
+    config2.usePrebufferSizeCalculationInSeconds = YES;
+    config2.requiredPrebufferSizeInSeconds = 1234;
+    
+    FSAudioStream *stream2 = [_stream initWithConfiguration:config2];
+    
+    XCTAssertTrue((stream2.configuration.usePrebufferSizeCalculationInSeconds == YES), @"Invalid configuration value for usePrebufferSizeCalculationInSeconds");
+    XCTAssertTrue((stream2.configuration.requiredPrebufferSizeInSeconds == 1234), @"Invalid configuration value for requiredPrebufferSizeInSeconds");
+}
+
 - (void)testPlaylistRetrieval
 {
     __weak FreeStreamerMobileTests *weakSelf = self;
@@ -320,6 +341,9 @@ playback_short_file:
         
         if (_checkStreamState) {
             // Stream started playing.
+            
+            XCTAssertTrue((_controller.activeStream.continuous), @"Stream must be continuous");
+            XCTAssertTrue((_controller.activeStream.contentLength == 0), @"Invalid content length");
             
             XCTAssertTrue((_controller.volume == 0), @"Invalid controller volume");
             
@@ -466,7 +490,7 @@ playback_short_file:
         
         [_stream playFromURL:url];
         
-        NSLog(@"Cycle %lu", ++i);
+        NSLog(@"Cycle %lu", (unsigned long)++i);
     }
 }
 
@@ -504,9 +528,11 @@ playback_short_file:
             if (tickCounter > 20) {
                 NSLog(@"2 seconds passed since the stream started playing, checking the state");
                 
+                XCTAssertFalse((_stream.continuous), @"Stream must be non-continuous");
+                
                 XCTAssertTrue((_stream.duration.minute == 4), @"Invalid stream duration (minutes)");
                 XCTAssertTrue((_stream.duration.second == 17), @"Invalid stream duration (seconds)");
-                XCTAssertTrue((_stream.contentLength == 8227656), @"Invalid content length");
+                XCTAssertTrue((_stream.contentLength == 9473902), @"Invalid content length");
                 
                 // Checks done, we are done.
                 _keepRunning = NO;

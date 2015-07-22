@@ -63,8 +63,10 @@
     
     __weak FSPlaylistViewController *weakSelf = self;
     
+    _diskCachingAllowed = YES;
+    
     _request = [[FSParseRssPodcastFeedRequest alloc] init];
-    _request.url = [NSURL URLWithString:@"https://raw.github.com/muhku/FreeStreamer/master/Extra/example-rss-feed.xml"];
+    _request.url = [NSURL fileURLWithPath:[[NSBundle mainBundle] pathForResource:@"example-rss-feed" ofType:@"xml"]];
     _request.onCompletion = ^() {
         [UIApplication sharedApplication].networkActivityIndicatorVisible = NO;
         
@@ -94,6 +96,12 @@
     self.navigationController.navigationBar.topItem.title = [[NSString alloc] initWithFormat:@"FreeStreamer %i.%i.%i", FREESTREAMER_VERSION_MAJOR, FREESTREAMER_VERSION_MINOR, FREESTREAMER_VERSION_REVISION];
     
     self.view.backgroundColor = [UIColor whiteColor];
+    
+    if (_diskCachingAllowed) {
+        self.diskCacheControl.selectedSegmentIndex = 0;
+    } else {
+        self.diskCacheControl.selectedSegmentIndex = 1;
+    }
 }
 
 - (void)viewDidAppear:(BOOL)animated
@@ -120,6 +128,32 @@
     [alert show];
 }
 
+- (IBAction)switchDiskCache:(id)sender
+{
+    NSString *message = nil;
+    switch (self.diskCacheControl.selectedSegmentIndex) {
+        case 0:
+            message = @"Disk caching enabled.";
+            _diskCachingAllowed = YES;
+            break;
+            
+        case 1:
+            message = @"Disk caching disabled.";
+            _diskCachingAllowed = NO;
+            break;
+            
+        default:
+            break;
+    }
+    
+    UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Cache setting"
+                                                    message:message
+                                                   delegate:nil
+                                          cancelButtonTitle:@"OK"
+                                          otherButtonTitles:nil];
+    [alert show];
+}
+
 - (IBAction)selectBufferSize:(id)sender
 {
     UISegmentedControl *segmentedControl = sender;
@@ -129,22 +163,26 @@
     switch ([segmentedControl selectedSegmentIndex]) {
         case 1:
             // 0 KB
+            _configuration.usePrebufferSizeCalculationInSeconds = NO;
             _configuration.requiredInitialPrebufferedByteCountForContinuousStream = 0;
             _configuration.requiredInitialPrebufferedByteCountForNonContinuousStream = 0;
             break;
         case 2:
             // 100 KB
+            _configuration.usePrebufferSizeCalculationInSeconds = NO;
             _configuration.requiredInitialPrebufferedByteCountForContinuousStream = 100000;
             _configuration.requiredInitialPrebufferedByteCountForNonContinuousStream = 100000;
             break;
         case 3:
             // 200 KB
+            _configuration.usePrebufferSizeCalculationInSeconds = NO;
             _configuration.requiredInitialPrebufferedByteCountForContinuousStream = 200000;
             _configuration.requiredInitialPrebufferedByteCountForNonContinuousStream = 200000;
             break;
             
         default:
             // Use defaults
+            _configuration.usePrebufferSizeCalculationInSeconds = YES;
             break;
     }
 }
@@ -213,6 +251,8 @@
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath
 {
 	FSPlaylistItem *item = [self playlistItems][indexPath.row];
+    
+    _configuration.cacheEnabled = _diskCachingAllowed;
 
     self.playerViewController.configuration = _configuration;
     self.playerViewController.selectedPlaylistItem = item;

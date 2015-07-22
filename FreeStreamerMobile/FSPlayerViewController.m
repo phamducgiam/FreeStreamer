@@ -17,6 +17,7 @@
 #import "FSFrequencyPlotView.h"
 #import "AJNotificationView.h"
 #import "FSLogger.h"
+#import "FSAppDelegate.h"
 
 /*
  * To pause after seeking, uncomment the following line:
@@ -44,6 +45,12 @@
 @property (nonatomic,copy) NSURL *stationURL;
 @property (nonatomic,strong) UIBarButtonItem *infoButton;
 @property (nonatomic,readonly) FSLogger *stateLogger;
+@property (nonatomic,assign) BOOL enableLogging;
+@property (nonatomic,assign) BOOL initialBuffering;
+@property (nonatomic,assign) UInt64 measurementCount;
+@property (nonatomic,assign) UInt64 audioStreamPacketCount;
+@property (nonatomic,assign) UInt64 bufferUnderrunCount;
+
 
 - (void)clearStatus;
 - (void)showStatus:(NSString *)status;
@@ -92,6 +99,17 @@
     
     [_stateLogger logMessageWithTimestamp:[self.audioController.activeStream description]];
     
+    _statisticsSnapshotTimer = [NSTimer scheduledTimerWithTimeInterval:1
+                                                                target:self
+                                                              selector:@selector(snapshotStats)
+                                                              userInfo:nil
+                                                               repeats:YES];
+    _enableLogging = NO;
+    _initialBuffering = YES;
+    _measurementCount = 0;
+    _audioStreamPacketCount = 0;
+    _bufferUnderrunCount = 0;
+    
     NSLog(@"FreeStreamer logs will be available in\n%@ and\n%@",
           _stateLogger.logName,
           _bufferStatLogger.logName);
@@ -104,6 +122,9 @@
     [[UIApplication sharedApplication] setStatusBarStyle:UIStatusBarStyleBlackOpaque
                                                 animated:NO];
 #endif
+    
+    FSAppDelegate *delegate = [UIApplication sharedApplication].delegate;
+    [delegate resetBackground];
     
     self.navigationController.navigationBar.barStyle = UIBarStyleBlack;
     self.navigationController.navigationBarHidden = NO;
@@ -129,6 +150,8 @@
     self.audioController.onStateChange = ^(FSAudioStreamState state) {
         switch (state) {
             case kFsAudioStreamRetrievingURL:
+                weakSelf.enableLogging = NO;
+                
                 [UIApplication sharedApplication].networkActivityIndicatorVisible = YES;
                 
                 [weakSelf showStatus:@"Retrieving URL..."];
@@ -145,7 +168,7 @@
                 break;
                 
             case kFsAudioStreamStopped:
-                [weakSelf.statisticsSnapshotTimer invalidate];
+                weakSelf.enableLogging = NO;
                 
                 [UIApplication sharedApplication].networkActivityIndicatorVisible = NO;
                 
@@ -161,8 +184,20 @@
                 break;
                 
             case kFsAudioStreamBuffering: {
-                NSString *bufferingStatus = [[NSString alloc] initWithFormat:@"Buffering %i bytes...", (weakSelf.audioController.activeStream.continuous ? weakSelf.configuration.requiredInitialPrebufferedByteCountForContinuousStream :
-                    weakSelf.configuration.requiredInitialPrebufferedByteCountForNonContinuousStream)];
+                if (weakSelf.initialBuffering) {
+                    weakSelf.enableLogging = NO;
+                    weakSelf.initialBuffering = NO;
+                } else {
+                    weakSelf.enableLogging = YES;
+                }
+                
+                NSString *bufferingStatus = nil;
+                if (weakSelf.configuration.usePrebufferSizeCalculationInSeconds) {
+                    bufferingStatus = [[NSString alloc] initWithFormat:@"Buffering %f seconds...", weakSelf.audioController.activeStream.configuration.requiredPrebufferSizeInSeconds];
+                } else {
+                    bufferingStatus = [[NSString alloc] initWithFormat:@"Buffering %i bytes...", (weakSelf.audioController.activeStream.continuous ? weakSelf.configuration.requiredInitialPrebufferedByteCountForContinuousStream :
+                                                                                                  weakSelf.configuration.requiredInitialPrebufferedByteCountForNonContinuousStream)];
+                }
                 
                 [weakSelf showStatus:bufferingStatus];
                 
@@ -178,6 +213,8 @@
             }
                 
             case kFsAudioStreamSeeking:
+                weakSelf.enableLogging = NO;
+                
                 [weakSelf showStatus:@"Seeking..."];
                 
                 [UIApplication sharedApplication].networkActivityIndicatorVisible = YES;
@@ -191,12 +228,10 @@
                 break;
                 
             case kFsAudioStreamPlaying:
+                weakSelf.enableLogging = YES;
+                
 #if DO_STATKEEPING
-                weakSelf.statisticsSnapshotTimer = [NSTimer scheduledTimerWithTimeInterval:1
-                                                                                target:weakSelf
-                                                                              selector:@selector(snapshotStats)
-                                                                              userInfo:nil
-                                                                               repeats:YES];
+                NSLog(@"%@", weakSelf.audioController.activeStream);
 #endif
                 
                 [weakSelf determineStationNameWithMetaData:nil];
@@ -247,7 +282,7 @@
                 break;
                 
             case kFsAudioStreamFailed:
-                [weakSelf.statisticsSnapshotTimer invalidate];
+                weakSelf.enableLogging = YES;
                 
                 [UIApplication sharedApplication].networkActivityIndicatorVisible = NO;
                 weakSelf.progressSlider.enabled = NO;
@@ -259,6 +294,8 @@
                 
                 break;
             case kFsAudioStreamPlaybackCompleted:
+                weakSelf.enableLogging = NO;
+                
                 [weakSelf toggleNextPreviousButtons];
                 
                 [weakSelf.stateLogger logMessageWithTimestamp:@"State change: playback completed"];
@@ -266,6 +303,8 @@
                 break;
             
             case kFsAudioStreamRetryingStarted:
+                weakSelf.enableLogging = YES;
+                
                 [weakSelf showStatus:@"Attempt to retry playback..."];
                 
                 [weakSelf.stateLogger logMessageWithTimestamp:@"State change: retrying started"];
@@ -273,12 +312,15 @@
                 break;
                 
             case kFsAudioStreamRetryingSucceeded:
+                weakSelf.enableLogging = YES;
                 
                 [weakSelf.stateLogger logMessageWithTimestamp:@"State change: retrying succeeded"];
                 
                 break;
                 
             case kFsAudioStreamRetryingFailed:
+                weakSelf.enableLogging = YES;
+                
                 [weakSelf showErrorStatus:@"Failed to retry playback"];
                 
                 [weakSelf.stateLogger logMessageWithTimestamp:@"State change: retrying failed"];
@@ -353,6 +395,16 @@
             weakSelf.stationURL = [NSURL URLWithString:metaData[@"StreamUrl"]];
             
             weakSelf.navigationItem.rightBarButtonItem = weakSelf.infoButton;
+        }
+        
+        if (metaData[@"CoverArt"]) {
+            FSAppDelegate *delegate = [UIApplication sharedApplication].delegate;
+            
+            NSData *data = [[NSData alloc] initWithBase64EncodedString:metaData[@"CoverArt"] options:0];
+            
+            UIImage *coverArt = [UIImage imageWithData:data];
+            
+            delegate.window.backgroundColor = [UIColor colorWithPatternImage:coverArt];
         }
         
         [weakSelf.statusLabel setHidden:NO];
@@ -459,10 +511,17 @@
     [super viewDidDisappear:animated];
     
 #if DO_STATKEEPING
-    _stateLogger = nil;
-    _bufferStatLogger = nil;
+    [_statisticsSnapshotTimer invalidate], _statisticsSnapshotTimer = nil;
+    _enableLogging = NO;
+    
+    NSString *stats = [NSString stringWithFormat:@"measurementCount = %llu, audioStreamPacketCount = %llu, bufferUnderrunCount = %llu", _measurementCount, _audioStreamPacketCount, _bufferUnderrunCount];
+    
+    [_stateLogger logMessageWithTimestamp:stats];
     
     [_stateLogger logMessageWithTimestamp:@"Player view will disappear. Freeing up the player."];
+    
+    _stateLogger = nil;
+    _bufferStatLogger = nil;
 #endif
     
     // Free the resources (audio queue, etc.)
@@ -875,6 +934,10 @@
 
 - (void)snapshotStats
 {
+    if (!_enableLogging) {
+        return;
+    }
+    
     FSStreamStatistics *stat = self.audioController.activeStream.statistics;
     
     if (stat.audioStreamPacketCount < 50) {
@@ -888,6 +951,14 @@
     NSString *statDescription = [stat description];
     
     self.snapshotLabel.text = statDescription;
+    
+    _measurementCount++;
+    
+    _audioStreamPacketCount += stat.audioStreamPacketCount;
+    
+    if (stat.audioQueueUsedBufferCount == 0) {
+        _bufferUnderrunCount++;
+    }
     
     [_bufferStatLogger logMessage:statDescription];
 }

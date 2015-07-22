@@ -68,6 +68,7 @@ Audio_Stream::Audio_Stream() :
     m_ignoreDecodeQueueSize(false),
     m_audioQueueConsumedPackets(false),
     m_contentLength(0),
+    m_defaultContentLength(0),
     m_bytesReceived(0),
     m_state(STOPPED),
     m_inputStream(0),
@@ -101,6 +102,7 @@ Audio_Stream::Audio_Stream() :
     m_audioDataByteCount(0),
     m_audioDataPacketCount(0),
     m_bitRate(0),
+    m_metaDataSizeInBytes(0),
     m_packetDuration(0),
     m_bitrateBufferIndex(0),
     m_outputVolume(1.0),
@@ -227,6 +229,7 @@ void Audio_Stream::open(Input_Stream_Position *position)
     m_converterRunOutOfData = false;
     m_audioDataPacketCount = 0;
     m_bitRate = 0;
+    m_metaDataSizeInBytes = 0;
     m_discontinuity = true;
     m_ignoreDecodeQueueSize = false;
     m_audioQueueConsumedPackets = false;
@@ -237,6 +240,8 @@ void Audio_Stream::open(Input_Stream_Position *position)
         CFRunLoopTimerInvalidate(m_watchdogTimer);
         CFRelease(m_watchdogTimer), m_watchdogTimer = 0;
     }
+
+    invalidateWatchdogTimer();
     
     if (m_audioQueueTimer) {
         CFRunLoopTimerInvalidate(m_audioQueueTimer);
@@ -274,25 +279,7 @@ void Audio_Stream::open(Input_Stream_Position *position)
         setState(BUFFERING);
         
         if (!m_preloading && config->startupWatchdogPeriod > 0) {
-            /*
-             * Start the WD if we have one requested. In this way we can track
-             * that the stream doesn't stuck forever on the buffering state
-             * (for instance some network error condition)
-             */
-            
-            CFRunLoopTimerContext ctx = {0, this, NULL, NULL, NULL};
-            
-            m_watchdogTimer = CFRunLoopTimerCreate(NULL,
-                                                   CFAbsoluteTimeGetCurrent() + config->startupWatchdogPeriod,
-                                                   0,
-                                                   0,
-                                                   0,
-                                                   watchdogTimerCallback,
-                                                   &ctx);
-            
-            AS_TRACE("Starting the startup watchdog, period %i seconds\n", config->startupWatchdogPeriod);
-            
-            CFRunLoopAddTimer(CFRunLoopGetCurrent(), m_watchdogTimer, kCFRunLoopCommonModes);
+            createWatchdogTimer();
         }
     } else {
         closeAndSignalError(AS_ERR_OPEN, CFSTR("Input stream open error"));
@@ -303,10 +290,7 @@ void Audio_Stream::close(bool closeParser)
 {
     AS_TRACE("%s: enter\n", __PRETTY_FUNCTION__);
     
-    if (m_watchdogTimer) {
-        CFRunLoopTimerInvalidate(m_watchdogTimer);
-        CFRelease(m_watchdogTimer), m_watchdogTimer = 0;
-    }
+    invalidateWatchdogTimer();
     
     if (m_audioQueueTimer) {
         CFRunLoopTimerInvalidate(m_audioQueueTimer);
@@ -415,7 +399,7 @@ float Audio_Stream::durationInSeconds()
     if (m_audioDataByteCount > 0) {
         audioFileLength = m_audioDataByteCount;
     } else {
-        audioFileLength = contentLength();
+        audioFileLength = contentLength() - m_metaDataSizeInBytes;
     }
     
     if (audioFileLength > 0) {
@@ -643,6 +627,11 @@ void Audio_Stream::setSeekOffset(float offset)
 {
     m_seekOffset = offset;
 }
+ 
+void Audio_Stream::setDefaultContentLength(UInt64 defaultContentLength)
+{
+    m_defaultContentLength = defaultContentLength;
+}
     
 void Audio_Stream::setContentLength(UInt64 contentLength)
 {
@@ -843,6 +832,9 @@ void Audio_Stream::audioQueueBuffersEmpty()
                 CFRelease(errorDescription);
             }
         }
+        
+        // Create the watchdog in case the input stream gets stuck
+        createWatchdogTimer();
         
         return;
     }
@@ -1157,6 +1149,13 @@ void  Audio_Stream::setRecordingTrackEnabled(bool enabled)
     m_RecordingTrackEnabled = enabled;
 }
     
+void Audio_Stream::streamMetaDataByteSizeAvailable(UInt32 sizeInBytes)
+{
+    m_metaDataSizeInBytes = sizeInBytes;
+    
+    AS_TRACE("metadata size received %i\n", m_metaDataSizeInBytes);
+}
+
 /* private */
     
 CFStringRef Audio_Stream::createHashForString(CFStringRef str)
@@ -1224,11 +1223,19 @@ void Audio_Stream::closeAudioQueue()
     delete m_audioQueue, m_audioQueue = 0;
 }
     
+UInt64 Audio_Stream::defaultContentLength()
+{
+    return m_defaultContentLength;
+}
+    
 UInt64 Audio_Stream::contentLength()
 {
     if (m_contentLength == 0) {
         if (m_inputStream) {
             m_contentLength = m_inputStream->contentLength();
+            if (m_contentLength == 0) {
+                m_contentLength = defaultContentLength();
+            }
         }
     }
     return m_contentLength;
@@ -1347,6 +1354,47 @@ void Audio_Stream::audioQueueTimerCallback(CFRunLoopTimerRef timer, void *info)
     
     if (count > 0) {
         THIS->enqueueCachedData(config->decodeQueueSize);
+    }
+}
+    
+void Audio_Stream::createWatchdogTimer()
+{
+    Stream_Configuration *config = Stream_Configuration::configuration();
+    
+    if (!(config->startupWatchdogPeriod > 0)) {
+        return;
+    }
+    
+    invalidateWatchdogTimer();
+    
+    /*
+     * Start the WD if we have one requested. In this way we can track
+     * that the stream doesn't stuck forever on the buffering state
+     * (for instance some network error condition)
+     */
+    
+    CFRunLoopTimerContext ctx = {0, this, NULL, NULL, NULL};
+    
+    m_watchdogTimer = CFRunLoopTimerCreate(NULL,
+                                           CFAbsoluteTimeGetCurrent() + config->startupWatchdogPeriod,
+                                           0,
+                                           0,
+                                           0,
+                                           watchdogTimerCallback,
+                                           &ctx);
+    
+    AS_TRACE("Starting the startup watchdog, period %i seconds\n", config->startupWatchdogPeriod);
+    
+    CFRunLoopAddTimer(CFRunLoopGetCurrent(), m_watchdogTimer, kCFRunLoopCommonModes);
+}
+    
+void Audio_Stream::invalidateWatchdogTimer()
+{
+    if (m_watchdogTimer) {
+        CFRunLoopTimerInvalidate(m_watchdogTimer);
+        CFRelease(m_watchdogTimer), m_watchdogTimer = 0;
+        
+        AS_TRACE("Watchdog invalidated\n");
     }
 }
 
@@ -1514,12 +1562,7 @@ void Audio_Stream::enqueueCachedData(int minPacketsRequired)
         if (err == noErr) {
             AS_TRACE("%i output bytes available for the audio queue\n", (unsigned int)ioOutputDataPackets);
             
-            if (m_watchdogTimer) {
-                AS_TRACE("The stream started to play, canceling the watchdog\n");
-                
-                CFRunLoopTimerInvalidate(m_watchdogTimer);
-                CFRelease(m_watchdogTimer), m_watchdogTimer = 0;
-            }
+            invalidateWatchdogTimer();
             
             setState(PLAYING);
             
@@ -1647,15 +1690,18 @@ void Audio_Stream::propertyValueCallback(void *inClientData, AudioFileStreamID i
     
     switch (inPropertyID) {
         case kAudioFileStreamProperty_BitRate: {
+            bool sizeReceivedForFirstTime = (THIS->m_bitRate == 0);
             UInt32 bitRateSize = sizeof(THIS->m_bitRate);
             OSStatus err = AudioFileStreamGetProperty(inAudioFileStream,
                                                       kAudioFileStreamProperty_BitRate,
                                                       &bitRateSize, &THIS->m_bitRate);
             if (err) {
                 THIS->m_bitRate = 0;
-            }
-            else {
+            } else {
                 THIS->calculatePrebufferedSize();
+                if (THIS->m_delegate && sizeReceivedForFirstTime) {
+                    THIS->m_delegate->bitrateAvailable();
+                }
             }
             break;
         }
@@ -1790,6 +1836,12 @@ void Audio_Stream::streamDataCallback(void *inClientData, UInt32 inNumberBytes, 
             // stable.
             
             THIS->m_bitrateBuffer[THIS->m_bitrateBufferIndex++] = 8 * inPacketDescriptions[i].mDataByteSize / THIS->m_packetDuration;
+            
+            if (THIS->m_bitrateBufferIndex == kAudioStreamBitrateBufferSize) {
+                if (THIS->m_delegate) {
+                    THIS->m_delegate->bitrateAvailable();
+                }
+            }
         }
         else if (THIS->m_bitrateBufferIndex == kAudioStreamBitrateBufferSize) {
             THIS->calculateBitrate();

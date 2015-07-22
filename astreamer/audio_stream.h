@@ -82,6 +82,7 @@ public:
     void setStrictContentTypeChecking(bool strictChecking);
     void setDefaultContentType(CFStringRef defaultContentType);
     void setSeekOffset(float offset);
+    void setDefaultContentLength(UInt64 defaultContentLength);
     void setContentLength(UInt64 contentLength);
     void setPreloading(bool preloading);
     bool isPreloading();
@@ -100,6 +101,7 @@ public:
     bool strictContentTypeChecking();
     float bitrate();
     
+    UInt64 defaultContentLength();
     UInt64 contentLength();
     int playbackDataCount();
     int audioQueueNumberOfBuffersInUse();
@@ -124,6 +126,7 @@ public:
     void stopRecording();
     bool isRecording();
     void setRecordingTrackEnabled(bool enabled);
+    void streamMetaDataByteSizeAvailable(UInt32 sizeInBytes);
 
 private:
     
@@ -138,6 +141,7 @@ private:
     bool m_ignoreDecodeQueueSize;
     bool m_audioQueueConsumedPackets;
     
+    UInt64 m_defaultContentLength;
     UInt64 m_contentLength;
     UInt64 m_bytesReceived;
     
@@ -182,6 +186,7 @@ private:
     UInt64 m_audioDataByteCount;
     UInt64 m_audioDataPacketCount;
     UInt32 m_bitRate;
+    UInt32 m_metaDataSizeInBytes;
     
     double m_packetDuration;
     double m_bitrateBuffer[kAudioStreamBitrateBufferSize];
@@ -200,6 +205,9 @@ private:
     void closeAndSignalError(int error, CFStringRef errorDescription);
     void setState(State state);
     void setCookiesForStream(AudioFileStreamID inAudioFileStream);
+    
+    void createWatchdogTimer();
+    void invalidateWatchdogTimer();
     
     int cachedDataCount();
     void enqueueCachedData(int minPacketsRequired);
@@ -259,6 +267,7 @@ public:
     virtual void samplesAvailable(AudioBufferList samples, AudioStreamPacketDescription description) = 0;
     virtual void audioStreamDidRecordTrack(CFStringRef recordDirectory, CFStringRef recordFile, std::map<CFStringRef, CFStringRef> *metaData, bool finish) = 0;
     virtual void audioStreamRecordingErrorOccurred(bool status) = 0;
+    virtual void bitrateAvailable() = 0;
 };
 
 } // namespace astreamer

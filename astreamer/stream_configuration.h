@@ -25,13 +25,16 @@ struct Stream_Configuration {
     int maxBounceCount;
     int startupWatchdogPeriod;
     int maxPrebufferedByteCount;
+    bool usePrebufferSizeCalculationInSeconds;
     int requiredInitialPrebufferedByteCountForContinuousStream;
     int requiredInitialPrebufferedByteCountForNonContinuousStream;
+    int requiredPrebufferSizeInSeconds;
     CFStringRef userAgent;
     CFStringRef cacheDirectory;
     CFDictionaryRef predefinedHttpHeaderValues;
     bool cacheEnabled;
     bool seekingFromCacheEnabled;
+    bool automaticAudioSessionHandlingEnabled;
     int maxDiskCacheSize;
     
     int requiredPrebufferedSecondsForContinuousStream;

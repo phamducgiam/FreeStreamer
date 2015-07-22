@@ -19,6 +19,92 @@
 #endif
 
 namespace astreamer {
+
+// Code from:
+// http://www.opensource.apple.com/source/libsecurity_manifest/libsecurity_manifest-29384/lib/SecureDownloadInternal.c
+
+// Returns a CFString containing the base64 representation of the data.
+// boolean argument for whether to line wrap at 64 columns or not.
+CFStringRef createBase64EncodedString(const UInt8* ptr, size_t len, int wrap) {
+    const char* alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "abcdefghijklmnopqrstuvwxyz"
+    "0123456789+/=";
+    
+    // base64 encoded data uses 4 ASCII characters to represent 3 octets.
+    // There can be up to two == at the end of the base64 data for padding.
+    // If we are line wrapping then we need space for one newline character
+    // every 64 characters of output.
+    // Rounded 4/3 up to 2 to avoid floating point math.
+    
+    //CFIndex max_len = (2*len) + 2;
+    //if (wrap) len = len + ((2*len) / 64) + 1;
+    
+    CFMutableStringRef string = CFStringCreateMutable(NULL, 0);
+    if (!string) return NULL;
+    
+    /*
+     http://www.faqs.org/rfcs/rfc3548.html
+     +--first octet--+-second octet--+--third octet--+
+     |7 6 5 4 3 2 1 0|7 6 5 4 3 2 1 0|7 6 5 4 3 2 1 0|
+     +-----------+---+-------+-------+---+-----------+
+     |5 4 3 2 1 0|5 4 3 2 1 0|5 4 3 2 1 0|5 4 3 2 1 0|
+     +--1.index--+--2.index--+--3.index--+--4.index--+
+     */
+    int i = 0;		// octet offset into input data
+    int column = 0;		// output column number (used for line wrapping)
+    for (;;) {
+        UniChar c[16];	// buffer of characters to add to output
+        int j = 0;	// offset to place next character in buffer
+        int index;	// index into output alphabet
+        
+#define ADDCHAR(_X_) do { c[j++] = _X_; if (wrap && (++column == 64)) { column = 0; c[j++] = '\n'; } } while (0);
+        
+        // 1.index
+        index = (ptr[i] >> 2) & 0x3F;
+        ADDCHAR(alphabet[index]);
+        
+        // 2.index
+        index = (ptr[i] << 4) & 0x30;
+        if ((i+1) < len) {
+            index = index | ((ptr[i+1] >> 4) & 0x0F);
+            ADDCHAR(alphabet[index]);
+        } else {	// end of input, pad as necessary
+            ADDCHAR(alphabet[index]);
+            ADDCHAR('=');
+            ADDCHAR('=');
+        }
+        
+        // 3.index
+        if ((i+1) < len) {
+            index = (ptr[i+1] << 2) & 0x3C;
+            if ((i+2) < len) {
+                index = index | ((ptr[i+2] >> 6) & 0x03);
+                ADDCHAR(alphabet[index]);
+            } else {	// end of input, pad as necessary
+                ADDCHAR(alphabet[index]);
+                ADDCHAR('=');
+            }
+        }
+        
+        // 4.index
+        if ((i+2) < len) {
+            index = (ptr[i+2]) & 0x3F;
+            ADDCHAR(alphabet[index]);
+        }
+        
+        CFStringAppendCharacters(string, c, j);
+        i += 3; // we processed 3 bytes of input
+        if (i >= len) {
+            // end of data, append newline if we haven't already
+            if (wrap && c[j-1] != '\n') {
+                c[0] = '\n';
+                CFStringAppendCharacters(string, c, 1);
+            }
+            break;
+        }
+    }
+    return string;
+}
     
 enum ID3_Parser_State {
     ID3_Parser_State_Initial = 0,
@@ -49,11 +135,13 @@ public:
     ID3_Parser_State m_state;
     UInt32 m_bytesReceived;
     UInt32 m_tagSize;
+    UInt8 m_majorVersion;
     bool m_hasFooter;
     bool m_usesUnsynchronisation;
     bool m_usesExtendedHeader;
     CFStringRef m_title;
     CFStringRef m_performer;
+    CFStringRef m_coverArt;
     
     std::vector<UInt8> m_tagData;
 };
@@ -69,11 +157,13 @@ ID3_Parser_Private::ID3_Parser_Private() :
     m_state(ID3_Parser_State_Initial),
     m_bytesReceived(0),
     m_tagSize(0),
+    m_majorVersion(0),
     m_hasFooter(false),
     m_usesUnsynchronisation(false),
     m_usesExtendedHeader(false),
     m_title(NULL),
-    m_performer(NULL)
+    m_performer(NULL),
+    m_coverArt(NULL)
 {
 }
     
@@ -84,6 +174,9 @@ ID3_Parser_Private::~ID3_Parser_Private()
     }
     if (m_title) {
         CFRelease(m_title), m_title = NULL;
+    }
+    if (m_coverArt) {
+        CFRelease(m_coverArt), m_coverArt = NULL;
     }
 }
     
@@ -135,10 +228,10 @@ void ID3_Parser_Private::feedData(UInt8 *data, UInt32 numBytes)
                     break;
                 }
                 
-                UInt8 majorVersion = m_tagData[3];
-                // Currently support only id3v2.3
-                if (majorVersion != 3) {
-                    ID3_TRACE("ID3v2.%i not supported by the parser\n", majorVersion);
+                m_majorVersion = m_tagData[3];
+                // Currently support only id3v2.2 and 2.3
+                if (m_majorVersion != 2 && m_majorVersion != 3) {
+                    ID3_TRACE("ID3v2.%i not supported by the parser\n", m_majorVersion);
                     
                     setState(ID3_Parser_State_Not_Valid_Tag);
                     enoughBytesToParse = false;
@@ -151,13 +244,14 @@ void ID3_Parser_Private::feedData(UInt8 *data, UInt32 numBytes)
                 
                 if ((m_tagData[5] & 0x80) != 0) {
                     m_usesUnsynchronisation = true;
-                } else if ((m_tagData[5] & 0x40) != 0) {
+                } else if ((m_tagData[5] & 0x40) != 0 && m_majorVersion >= 3) {
                     m_usesExtendedHeader = true;
-                } else if ((m_tagData[5] & 0x10) != 0) {
+                } else if ((m_tagData[5] & 0x10) != 0 && m_majorVersion >= 3) {
                     m_hasFooter = true;
                 }
                 
-                m_tagSize = (m_tagData[6] << 21) + (m_tagData[7] << 14) + (m_tagData[8] << 7) + m_tagData[9];
+                m_tagSize = ((m_tagData[6] & 0x7F) << 21) | ((m_tagData[7] & 0x7F) << 14) |
+                            ((m_tagData[8] & 0x7F) << 7) | (m_tagData[9] & 0x7F);
                 
                 if (m_tagSize > 0) {
                     if (m_hasFooter) {
@@ -166,6 +260,10 @@ void ID3_Parser_Private::feedData(UInt8 *data, UInt32 numBytes)
                     m_tagSize += 10;
                     
                     ID3_TRACE("tag size: %i\n", m_tagSize);
+                    
+                    if (m_parser->m_delegate) {
+                        m_parser->m_delegate->id3tagSizeAvailable(m_tagSize);
+                    }
                     
                     setState(ID3_Parser_State_Parse_Frames);
                     break;
@@ -211,22 +309,42 @@ void ID3_Parser_Private::feedData(UInt8 *data, UInt32 numBytes)
                     frameName[0] = m_tagData[pos];
                     frameName[1] = m_tagData[pos+1];
                     frameName[2] = m_tagData[pos+2];
-                    frameName[3] = m_tagData[pos+3];
+                    
+                    if (m_majorVersion >= 3) {
+                        frameName[3] = m_tagData[pos+3];
+                    } else {
+                        frameName[3] = 0;
+                    }
                     frameName[4] = 0;
                     
-                    pos += 4;
+                    UInt32 framesize = 0;
                     
-                    UInt32 framesize = ((m_tagData[pos] << 21) |
+                    if (m_majorVersion >= 3) {
+                        pos += 4;
+                        
+                        framesize = ((m_tagData[pos] << 21) |
                                         (m_tagData[pos+1] << 14) |
                                         (m_tagData[pos+2] << 7) |
                                         m_tagData[pos+3]);
+                    } else {
+                        pos += 3;
+                        
+                        framesize = ((m_tagData[pos] << 16) |
+                                     (m_tagData[pos+1] << 8) |
+                                     m_tagData[pos+2]);
+                    }
+                    
                     if (framesize == 0) {
                         setState(ID3_Parser_State_Not_Valid_Tag);
                         enoughBytesToParse = false;
                         break;
                     }
                     
-                    pos += 6;
+                    if (m_majorVersion >= 3) {
+                        pos += 6;
+                    } else {
+                        pos += 3;
+                    }
                     
                     CFStringEncoding encoding;
                     bool byteOrderMark = false;
@@ -243,20 +361,55 @@ void ID3_Parser_Private::feedData(UInt8 *data, UInt32 numBytes)
                         encoding = kCFStringEncodingISOLatin1;
                     }
                     
-                    if (!strcmp(frameName, "TIT2")) {
+                    if (!strcmp(frameName, "TIT2") || !strcmp(frameName, "TT2")) {
                         if (m_title) {
                             CFRelease(m_title);
                         }
                         m_title = parseContent(framesize, pos + 1, encoding, byteOrderMark);
                         
                         ID3_TRACE("ID3 title parsed: '%s'\n", CFStringGetCStringPtr(m_title, CFStringGetSystemEncoding()));
-                    } else if (!strcmp(frameName, "TPE1")) {
+                    } else if (!strcmp(frameName, "TPE1") || !strcmp(frameName, "TP1")) {
                         if (m_performer) {
                             CFRelease(m_performer);
                         }
                         m_performer = parseContent(framesize, pos + 1, encoding, byteOrderMark);
                         
                         ID3_TRACE("ID3 performer parsed: '%s'\n", CFStringGetCStringPtr(m_performer, CFStringGetSystemEncoding()));
+                    } else if (!strcmp(frameName, "APIC")) {
+                        char imageType[65] = {0};
+                        
+                        size_t dataPos = pos+1;
+                        
+                        for (int i=0; m_tagData[dataPos]; i++,dataPos++) {
+                            imageType[i] = m_tagData[dataPos];
+                        }
+                        dataPos++;
+                        
+                        if (!strcmp(imageType, "image/jpeg") ||
+                            !strcmp(imageType, "image/png")) {
+                            
+                            ID3_TRACE("Image type %s, parsing, dataPos %zu\n", imageType, dataPos);
+                            
+                            // Skip the image description
+                            while (!m_tagData[++dataPos]);
+                            
+                            const size_t coverArtSize = framesize - ((dataPos - pos) + 5);
+                            
+                            UInt8 *bytes = new UInt8[coverArtSize];
+                            
+                            for (int i=0; i < coverArtSize; i++) {
+                                bytes[i] = m_tagData[dataPos+i];
+                            }
+                            
+                            if (m_coverArt) {
+                                CFRelease(m_coverArt);
+                            }
+                            m_coverArt = createBase64EncodedString(bytes, coverArtSize, 0);
+                            
+                            delete [] bytes;
+                        } else {
+                            ID3_TRACE("%s is an unknown type for image data, skipping\n", imageType);
+                        }
                     } else {
                         // Unknown/unhandled frame
                         ID3_TRACE("Unknown/unhandled frame: %s, size %i\n", frameName, framesize);
@@ -278,7 +431,12 @@ void ID3_Parser_Private::feedData(UInt8 *data, UInt32 numBytes)
                         metadataMap[CFSTR("MPMediaItemPropertyTitle")] =
                             CFStringCreateCopy(kCFAllocatorDefault, m_title);
                     }
-                
+                    
+                    if (m_coverArt && CFStringGetLength(m_coverArt) > 0) {
+                        metadataMap[CFSTR("CoverArt")] =
+                            CFStringCreateCopy(kCFAllocatorDefault, m_coverArt);
+                    }
+                    
                     m_parser->m_delegate->id3metaDataAvailable(metadataMap);
                 }
                 
@@ -304,6 +462,7 @@ void ID3_Parser_Private::reset()
     m_state = ID3_Parser_State_Initial;
     m_bytesReceived = 0;
     m_tagSize = 0;
+    m_majorVersion = 0;
     m_hasFooter = false;
     m_usesUnsynchronisation = false;
     m_usesExtendedHeader = false;
@@ -313,6 +472,9 @@ void ID3_Parser_Private::reset()
     }
     if (m_performer) {
         CFRelease(m_performer), m_performer = NULL;
+    }
+    if (m_coverArt) {
+        CFRelease(m_coverArt), m_coverArt = NULL;
     }
     
     m_tagData.clear();
